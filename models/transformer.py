@@ -2,6 +2,10 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import math
+from typing import Tuple 
+
+class Tokens:
+    pad_token = 0
 
 class Embedding(nn.Module):
 
@@ -119,15 +123,14 @@ class EncoderBlock(nn.Module):
         self.layer_norm = nn.LayerNorm(normalized_shape=d_model)
         self.mha = MHA(n_heads=n_heads, d_model=d_model, dropout_p=dropout_p, is_causal=False)
         self.ffn = FFN(d_model=d_model, dropout_p=dropout_p)
-        self.weight = nn.Parameter(data=0.5, requires_grad=True)
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:
 
         # x-> B, Q, D_MODEL
-        mha_out = x + self.mha(x, x, x)
-        ffn_out = x + self.ffn(x)
+        x = self.layer_norm(x + self.mha(x, x, x))
+        x = self.layer_norm(x + self.ffn(x))
 
-        return self.weight*mha_out + (1-self.weight)*ffn_out
+        return x
 
 
 class Encoder(nn.Module):
@@ -144,3 +147,74 @@ class Encoder(nn.Module):
             x = block(x)
         
         return x
+    
+class DecoderBlock(nn.Module):
+
+    def __init__(self, n_heads: int, d_model: int, dropout_p: float=0.1) -> None:
+
+        super().__init__()
+        self.layer_norm = nn.LayerNorm(normalized_shape=d_model)
+        self.masked_mha = MHA(n_heads=n_heads, d_model=d_model, dropout_p=dropout_p, is_causal=True)
+        self.cross_mha = MHA(n_heads=n_heads, d_model=d_model, dropout_p=dropout_p, is_causal=False)
+        self.ffn = FFN(d_model=d_model, dropout_p=dropout_p)
+    
+    def forward(self, encoder_out: torch.Tensor, decoder_in: torch.Tensor) -> torch.Tensor:
+        
+        masked_out = self.layer_norm(decoder_in + self.masked_mha(decoder_in, decoder_in, decoder_in))
+        cross_out = self.layer_norm(masked_out + self.cross_mha(encoder_out, masked_out, masked_out))
+        ffn_out = self.layer_norm(cross_out + self.ffn(cross_out))
+        return ffn_out
+
+class Decoder(nn.Module):
+
+    def __init__(self, n_layers: int, n_heads: int, d_model: int, dropout_p: float=0.1) -> None:
+
+        super().__init__()
+
+        self.blocks = nn.ModuleList([DecoderBlock(n_heads, d_model, dropout_p) for _ in range(n_layers)])
+    
+    def forward(self, encoder_out: torch.Tensor, decoder_in: torch.Tensor) -> torch.Tensor:
+
+        for block in self.blocks:
+            decoder_in = block(encoder_out, decoder_in)
+        
+        return decoder_in
+    
+
+class TranslateFormer(nn.Module):
+
+    def __init__(self, 
+                 input_vocab_size: int,
+                 output_vocab_size: int,
+                 max_seq_len: int,
+                 n_layers: int, 
+                 n_heads: int, 
+                 d_model: int, 
+                 dropout_p: float=0.1) -> None:
+
+        super().__init__()
+        self.input_embedding = Embedding(input_vocab_size, d_model, max_seq_len, dropout_p)
+        self.output_embedding = Embedding(output_vocab_size, d_model, max_seq_len, dropout_p)
+        self.encoder = Encoder(n_layers, n_heads, d_model, dropout_p)
+        self.decoder = Decoder(n_layers, n_heads, d_model, dropout_p)
+        self.cls_net = nn.Sequential(
+            nn.Dropout(dropout_p),
+            nn.Linear(in_features=d_model, out_features=output_vocab_size)
+        )
+
+    
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+
+        encoder_in: torch.Tensor = self.input_embedding(x)
+        decoder_in: torch.Tensor = self.output_embedding(y)
+
+        encoder_out: torch.Tensor = self.encoder(encoder_in)
+        decoder_out: torch.Tensor = self.decoder(encoder_out, decoder_in)
+
+        logits: torch.Tensor = self.cls_net(decoder_out) # B, K, OUTPUT_VOCAB_SIZE
+
+        B, SEQ_LEN, _ = logits.shape
+
+        loss = F.cross_entropy(logits.reshape(B*SEQ_LEN, -1), target=y.reshape(B*SEQ_LEN,),
+                               ignore_index=Tokens.pad_token)
+        return loss
