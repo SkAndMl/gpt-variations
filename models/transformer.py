@@ -161,7 +161,7 @@ class DecoderBlock(nn.Module):
     def forward(self, encoder_out: torch.Tensor, decoder_in: torch.Tensor) -> torch.Tensor:
         
         masked_out = self.layer_norm(decoder_in + self.masked_mha(decoder_in, decoder_in, decoder_in))
-        cross_out = self.layer_norm(masked_out + self.cross_mha(encoder_out, masked_out, masked_out))
+        cross_out = self.layer_norm(masked_out + self.cross_mha(masked_out, encoder_out, encoder_out))
         ffn_out = self.layer_norm(cross_out + self.ffn(cross_out))
         return ffn_out
 
