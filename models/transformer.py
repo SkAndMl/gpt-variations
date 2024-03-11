@@ -6,6 +6,9 @@ from typing import Tuple
 
 class Tokens:
     pad_token = 0
+    sos_token = 1
+    eos_token = 2
+    unk_token = 3
 
 class Embedding(nn.Module):
 
@@ -36,29 +39,27 @@ class Embedding(nn.Module):
 
 class MHA(nn.Module):
 
-    def __init__(self, n_heads: int, d_model: int, dropout_p: float=0.1, is_causal: bool=False):
+    def __init__(self, config, is_causal: bool=False):
         
         super().__init__()
 
-        assert d_model%n_heads == 0, AssertionError(f"{d_model} should be divisible by {n_heads}")
+        assert config["d_model"]%config["n_heads"] == 0, AssertionError(f"{config['d_model']} should be divisible by {config['n_heads']}")
 
-        self.n_heads = n_heads
-        self.d_model = d_model
-        self.head_dim = d_model//n_heads
+        self.n_heads = config["n_heads"]
+        self.d_model = config["d_model"]
+        self.head_dim = config["d_model"]//config["n_heads"]
         self.is_causal = is_causal
-        self.dropout_p = dropout_p
+        self.dropout_p = config["dropout"]
 
 
-        self.q_proj = nn.Linear(in_features=d_model, out_features=self.head_dim)
-        self.k_proj = nn.Linear(in_features=d_model, out_features=self.head_dim)
-        self.v_proj = nn.Linear(in_features=d_model, out_features=self.head_dim)
-        self.o_proj = nn.Linear(in_features=d_model, out_features=d_model)
+        self.q_proj = nn.Linear(in_features=self.d_model, out_features=self.head_dim)
+        self.k_proj = nn.Linear(in_features=self.d_model, out_features=self.head_dim)
+        self.v_proj = nn.Linear(in_features=self.d_model, out_features=self.head_dim)
+        self.o_proj = nn.Linear(in_features=self.d_model, out_features=self.d_model)
 
-        self.dropout = nn.Dropout(p=dropout_p)
+        self.dropout = nn.Dropout(p=self.dropout_p)
 
-        self.flash = False
-        if hasattr(F.scaled_dot_product_attention):
-            self.flash = True
+        self.flash = hasattr(torch.nn.functional, "scaled_dot_product_attention")
     
     def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
 
@@ -99,14 +100,16 @@ class MHA(nn.Module):
 
 class FFN(nn.Module):
 
-    def __init__(self, d_model: int, dropout_p: float=0.1):
+    def __init__(self, config):
 
         super().__init__()
+
+        d_model = config["d_model"]
 
         self.net = nn.Sequential(
             nn.Linear(d_model, d_model*4),
             nn.GELU(),
-            nn.Dropout(p=dropout_p),
+            nn.Dropout(p=config["dropout"]),
             nn.Linear(d_model*4, d_model)
         )
     
@@ -116,13 +119,13 @@ class FFN(nn.Module):
 
 class EncoderBlock(nn.Module):
 
-    def __init__(self, n_heads: int, d_model: int, dropout_p: float=0.1) -> None:
+    def __init__(self, config) -> None:
 
         super().__init__()
         
-        self.layer_norm = nn.LayerNorm(normalized_shape=d_model)
-        self.mha = MHA(n_heads=n_heads, d_model=d_model, dropout_p=dropout_p, is_causal=False)
-        self.ffn = FFN(d_model=d_model, dropout_p=dropout_p)
+        self.layer_norm = nn.LayerNorm(normalized_shape=config["d_model"])
+        self.mha = MHA(config, is_causal=False)
+        self.ffn = FFN(config)
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:
 
@@ -135,10 +138,10 @@ class EncoderBlock(nn.Module):
 
 class Encoder(nn.Module):
 
-    def __init__(self, n_layers: int, n_heads: int, d_model: int, dropout_p: float=0.1) -> None:
+    def __init__(self, config) -> None:
 
         super().__init__()
-        self.blocks = nn.ModuleDict([EncoderBlock(n_heads, d_model, dropout_p) for _ in range(n_layers)])
+        self.blocks = nn.ModuleList([EncoderBlock(config) for _ in range(config["n_layers"])])
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:
 
@@ -150,13 +153,13 @@ class Encoder(nn.Module):
     
 class DecoderBlock(nn.Module):
 
-    def __init__(self, n_heads: int, d_model: int, dropout_p: float=0.1) -> None:
+    def __init__(self, config) -> None:
 
         super().__init__()
-        self.layer_norm = nn.LayerNorm(normalized_shape=d_model)
-        self.masked_mha = MHA(n_heads=n_heads, d_model=d_model, dropout_p=dropout_p, is_causal=True)
-        self.cross_mha = MHA(n_heads=n_heads, d_model=d_model, dropout_p=dropout_p, is_causal=False)
-        self.ffn = FFN(d_model=d_model, dropout_p=dropout_p)
+        self.layer_norm = nn.LayerNorm(normalized_shape=config["d_model"])
+        self.masked_mha = MHA(config, is_causal=True)
+        self.cross_mha = MHA(config, is_causal=False)
+        self.ffn = FFN(config)
     
     def forward(self, encoder_out: torch.Tensor, decoder_in: torch.Tensor) -> torch.Tensor:
         
@@ -167,11 +170,11 @@ class DecoderBlock(nn.Module):
 
 class Decoder(nn.Module):
 
-    def __init__(self, n_layers: int, n_heads: int, d_model: int, dropout_p: float=0.1) -> None:
+    def __init__(self, config) -> None:
 
         super().__init__()
 
-        self.blocks = nn.ModuleList([DecoderBlock(n_heads, d_model, dropout_p) for _ in range(n_layers)])
+        self.blocks = nn.ModuleList([DecoderBlock(config) for _ in range(config["n_layers"])])
     
     def forward(self, encoder_out: torch.Tensor, decoder_in: torch.Tensor) -> torch.Tensor:
 
@@ -183,23 +186,22 @@ class Decoder(nn.Module):
 
 class TranslateFormer(nn.Module):
 
-    def __init__(self, 
-                 input_vocab_size: int,
-                 output_vocab_size: int,
-                 max_seq_len: int,
-                 n_layers: int, 
-                 n_heads: int, 
-                 d_model: int, 
-                 dropout_p: float=0.1) -> None:
+    def __init__(self, config) -> None:
 
         super().__init__()
-        self.input_embedding = Embedding(input_vocab_size, d_model, max_seq_len, dropout_p)
-        self.output_embedding = Embedding(output_vocab_size, d_model, max_seq_len, dropout_p)
-        self.encoder = Encoder(n_layers, n_heads, d_model, dropout_p)
-        self.decoder = Decoder(n_layers, n_heads, d_model, dropout_p)
+        self.input_embedding = Embedding(vocab_size=config["input_vocab_size"],
+                                         d_model=config["d_model"],
+                                         max_seq_len=config["input_max_seq_len"],
+                                         dropout=config["dropout"])
+        self.output_embedding = Embedding(vocab_size=config["output_vocab_size"],
+                                          d_model=config["d_model"],
+                                          max_seq_len=config["output_max_seq_len"],
+                                          dropout=config["dropout"])
+        self.encoder = Encoder(config)
+        self.decoder = Decoder(config)
         self.cls_net = nn.Sequential(
-            nn.Dropout(dropout_p),
-            nn.Linear(in_features=d_model, out_features=output_vocab_size)
+            nn.Dropout(config["dropout"]),
+            nn.Linear(in_features=config["d_model"], out_features=config["output_vocab_size"])
         )
 
     
