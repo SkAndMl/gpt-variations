@@ -5,13 +5,12 @@ import torch
 from typing import Tuple, Union
 from torch.nn.utils.rnn import pad_sequence
 
-batch_size = 32
-
 class Tokens:
     pad_token = 0
     sos_token = 1
     eos_token = 2
     unk_token = 3
+    sep_token = 4
 
 class LangDataset(Dataset):
 
@@ -34,8 +33,8 @@ class LangDataset(Dataset):
         
         lang1_sentence = self.dataset[index]["translation"][self.lang1]
         lang2_sentence = self.dataset[index]["translation"][self.lang2]
-        lang1_sentence = "<sos> " + lang1_sentence + " <eos>"
-        lang2_sentence = "<sos> " + lang2_sentence + " <eos>"
+        lang1_sentence = "<sos> " + lang1_sentence + " <sep>"
+        lang2_sentence = lang2_sentence + " <eos>"
         tokens = torch.tensor(self.tokenizer.encode(lang1_sentence+lang2_sentence).ids, dtype=torch.long)
 
         return tokens
@@ -59,7 +58,7 @@ def collate_fn(batch) -> Tuple[torch.Tensor]:
     fr = pad_sequence(sequences=fr, batch_first=True, padding_value=Tokens.pad_token)
     return en, fr
 
-def create_dataloader(lang1: str, lang2: str, split: str="train") -> Tuple[Union[DataLoader, int]]:
+def create_dataloader(lang1: str, lang2: str, split: str="train", batch_size: int=32) -> Tuple[Union[DataLoader, int]]:
 
     dataset = LangDataset(lang1=lang1, lang2=lang2, split=split)
 
@@ -74,5 +73,5 @@ def create_dataloader(lang1: str, lang2: str, split: str="train") -> Tuple[Union
     return dataloader, dataset.max_seq_len
 
 if __name__ == "__main__":
-    dl, max_seq_len = create_dataloader("en", "fr", "train")
+    dl, max_seq_len = create_dataloader("en", "fr", "train", 32)
     print(max_seq_len)

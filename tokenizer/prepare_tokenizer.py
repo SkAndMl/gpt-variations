@@ -14,14 +14,14 @@ def prepare_tokenizer(lang1: str, lang2: str) -> None:
     if not os.path.exists(FILE_PATH):
         with open(FILE_PATH, 'w', encoding='utf-8') as f:
             for i in range(books_ds["train"].num_rows):
-                lang1_sentence = "<sos>" + books_ds["train"][i]["translation"][lang1] + "<eos>"
-                lang2_sentence = "<sos>" + books_ds["train"][i]["translation"][lang2] + "<eos>" + "\n"
+                lang1_sentence = "<sos>" + books_ds["train"][i]["translation"][lang1] + "<sep>"
+                lang2_sentence = books_ds["train"][i]["translation"][lang2] + "<eos>" + "\n"
                 f.write(lang1_sentence + lang2_sentence)
 
     tokenizer = Tokenizer(BPE(unk_token="<unk>"))
     tokenizer.pre_tokenizer = Whitespace()
 
-    special_tokens = ["<pad>", "<sos>", "<eos>", "<unk>"]  
+    special_tokens = ["<pad>", "<sos>", "<eos>", "<unk>", "<sep>"]  
     trainer = BpeTrainer(special_tokens=special_tokens, vocab_size=30000, min_frequency=True) 
 
     tokenizer.train(files=[f"data/{lang1}-{lang2}.txt"], trainer=trainer)

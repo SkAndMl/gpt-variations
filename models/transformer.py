@@ -2,27 +2,30 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import math
-from typing import Tuple 
+from tokenizers import Tokenizer
+from typing import Optional, Tuple
 
 class Tokens:
     pad_token = 0
     sos_token = 1
     eos_token = 2
     unk_token = 3
+    sep_token = 4
 
 class Embedding(nn.Module):
 
-    def __init__(self, vocab_size: int, d_model: int, max_seq_len: int, dropout: float=0.1):
+    def __init__(self, config):
 
         super().__init__()
 
-        self.vocab_size = vocab_size
-        self.d_model = d_model
-        self.max_seq_len = max_seq_len
+        self.vocab_size = config["vocab_size"]
+        self.d_model = config["d_model"]
+        self.max_seq_len = config["max_seq_len"]
+        self.device = config["device"]
 
-        self.token_embedding = nn.Embedding(num_embeddings=vocab_size, embedding_dim=d_model)
-        self.pos_embedding = nn.Embedding(num_embeddings=max_seq_len, embedding_dim=d_model)
-        self.dropout = nn.Dropout(p=dropout)
+        self.token_embedding = nn.Embedding(num_embeddings=self.vocab_size, embedding_dim=self.d_model)
+        self.pos_embedding = nn.Embedding(num_embeddings=self.max_seq_len, embedding_dim=self.d_model)
+        self.dropout = nn.Dropout(p=config["dropout"])
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:
 
@@ -30,7 +33,7 @@ class Embedding(nn.Module):
 
         assert T<=self.max_seq_len, AssertionError(f"Sequence length {T} should be less than or equal to {self.max_seq_len}")
 
-        position = torch.arange(start=0, end=T, dtype=torch.int).unsqueeze(dim=0) # 1, T
+        position = torch.arange(start=0, end=T, dtype=torch.int).unsqueeze(dim=0).to(self.device) # 1, T
         tok_emb = self.token_embedding(x) # B, T, D_MODEL
         pos_emb = self.pos_embedding(position) # 1, T, D_MODEL
 
@@ -39,63 +42,46 @@ class Embedding(nn.Module):
 
 class MHA(nn.Module):
 
-    def __init__(self, config, is_causal: bool=False):
-        
+    def __init__(self, config) -> None:
         super().__init__()
 
-        assert config["d_model"]%config["n_heads"] == 0, AssertionError(f"{config['d_model']} should be divisible by {config['n_heads']}")
+        assert config["d_model"]%config["n_heads"]==0, AssertionError(f"d_model: {config['d_model']} should be divisible by n_heads: {config['n_heads']}")
 
         self.n_heads = config["n_heads"]
         self.d_model = config["d_model"]
-        self.head_dim = config["d_model"]//config["n_heads"]
-        self.is_causal = is_causal
+        self.head_dim = self.d_model//self.n_heads
         self.dropout_p = config["dropout"]
-
-
-        self.q_proj = nn.Linear(in_features=self.d_model, out_features=self.head_dim)
-        self.k_proj = nn.Linear(in_features=self.d_model, out_features=self.head_dim)
-        self.v_proj = nn.Linear(in_features=self.d_model, out_features=self.head_dim)
+        
+        self.proj = nn.Linear(in_features=self.d_model, out_features=self.d_model*3)
         self.o_proj = nn.Linear(in_features=self.d_model, out_features=self.d_model)
-
         self.dropout = nn.Dropout(p=self.dropout_p)
 
         self.flash = hasattr(torch.nn.functional, "scaled_dot_product_attention")
-    
-    def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
 
-        # query -> B, Q, D_MODEL
-        # key, value -> B, K, D_MODEL
-        B, Q, D_MODEL = query.shape
-        _, K, _ = key.shape
+        if not self.flash:
+            mask = torch.ones(size=(1, 1, config["max_seq_len"], config["max_seq_len"])).tril(diagonal=0)
+            self.register_buffer(name="mask", tensor=mask)
 
-        q: torch.Tensor = self.q_proj(query)
-        k: torch.Tensor = self.k_proj(key)
-        v: torch.Tensor = self.v_proj(value)
 
-        q = q.reshape(B, Q, self.n_heads, D_MODEL//self.n_heads).transpose(1, 2) # B, N_HEADS, Q, HEAD_DIM
-        k = k.reshape(B, K, self.n_heads, D_MODEL//self.n_heads).transpose(1, 2)
-        v = v.reshape(B, K, self.n_heads, D_MODEL//self.n_heads).transpose(1, 2)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        B, T, D_MODEL = x.shape
+        q, k, v = self.proj(x).split(D_MODEL, dim=2) # B, T, D_MODEL
+        q = q.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2) 
+        k = k.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        v = v.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
 
         if self.flash:
-            attn_weights = F.scaled_dot_product_attention(query=q,
-                                                          key=k,
-                                                          value=v,
-                                                          is_causal=self.is_causal,
-                                                          dropout_p=self.dropout_p)
+            attn_outputs: torch.Tensor = F.scaled_dot_product_attention(query=q, key=k, value=v,
+                                                          is_causal=True, dropout_p=self.dropout_p)
         else:
-
-            attn_weights = q @ k.transpose(-2, -1)/math.sqrt(D_MODEL)
-
-            if self.is_causal:
-                mask = torch.ones(size=(1, 1, Q, K)).tril(diagonal=0)
-                attn_weights = attn_weights.masked_fill(mask=mask.logical_not(), value=float("-inf"))
-            
-            attn_weights = F.softmax(input=attn_weights, dim=-1)
-            attn_weights = self.dropout(attn_weights) @ v
+            attn_outputs: torch.Tensor = q @ k.transpose(-2, -1)
+            attn_outputs = attn_outputs.masked_fill(self.mask[:, :, :T, :T].logical_not(), value=float("-inf"))
+            attn_outputs = F.softmax(attn_outputs/math.sqrt(self.head_dim))
+            attn_outputs = self.dropout(attn_outputs) @ v
         
-        # attn_weights -> B, N_HEADS, Q, HEAD_DIM
-        attn_weights = attn_weights.transpose(1, 2).contiguous().view(B, Q, D_MODEL)
-        return self.o_proj(attn_weights)
+        attn_outputs = attn_outputs.contiguous().view(B, T, D_MODEL)
+        return self.o_proj(attn_outputs)
     
 
 class FFN(nn.Module):
@@ -116,40 +102,6 @@ class FFN(nn.Module):
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         return self.net(x)
 
-
-class EncoderBlock(nn.Module):
-
-    def __init__(self, config) -> None:
-
-        super().__init__()
-        
-        self.layer_norm = nn.LayerNorm(normalized_shape=config["d_model"])
-        self.mha = MHA(config, is_causal=False)
-        self.ffn = FFN(config)
-    
-    def forward(self, x:torch.Tensor) -> torch.Tensor:
-
-        # x-> B, Q, D_MODEL
-        x = self.layer_norm(x + self.mha(x, x, x))
-        x = self.layer_norm(x + self.ffn(x))
-
-        return x
-
-
-class Encoder(nn.Module):
-
-    def __init__(self, config) -> None:
-
-        super().__init__()
-        self.blocks = nn.ModuleList([EncoderBlock(config) for _ in range(config["n_layers"])])
-    
-    def forward(self, x:torch.Tensor) -> torch.Tensor:
-
-        # x -> B, Q, D_MODEL
-        for block in self.blocks:
-            x = block(x)
-        
-        return x
     
 class DecoderBlock(nn.Module):
 
@@ -157,15 +109,13 @@ class DecoderBlock(nn.Module):
 
         super().__init__()
         self.layer_norm = nn.LayerNorm(normalized_shape=config["d_model"])
-        self.masked_mha = MHA(config, is_causal=True)
-        self.cross_mha = MHA(config, is_causal=False)
+        self.masked_mha = MHA(config)
         self.ffn = FFN(config)
     
-    def forward(self, encoder_out: torch.Tensor, decoder_in: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         
-        masked_out = self.layer_norm(decoder_in + self.masked_mha(decoder_in, decoder_in, decoder_in))
-        cross_out = self.layer_norm(masked_out + self.cross_mha(masked_out, encoder_out, encoder_out))
-        ffn_out = self.layer_norm(cross_out + self.ffn(cross_out))
+        masked_out = self.layer_norm(x + self.masked_mha(x))
+        ffn_out = self.layer_norm(masked_out + self.ffn(masked_out))
         return ffn_out
 
 class Decoder(nn.Module):
@@ -176,12 +126,12 @@ class Decoder(nn.Module):
 
         self.blocks = nn.ModuleList([DecoderBlock(config) for _ in range(config["n_layers"])])
     
-    def forward(self, encoder_out: torch.Tensor, decoder_in: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
 
         for block in self.blocks:
-            decoder_in = block(encoder_out, decoder_in)
+            x = block(x)
         
-        return decoder_in
+        return x
     
 
 class TranslateFormer(nn.Module):
@@ -189,34 +139,45 @@ class TranslateFormer(nn.Module):
     def __init__(self, config) -> None:
 
         super().__init__()
-        self.input_embedding = Embedding(vocab_size=config["input_vocab_size"],
-                                         d_model=config["d_model"],
-                                         max_seq_len=config["input_max_seq_len"],
-                                         dropout=config["dropout"])
-        self.output_embedding = Embedding(vocab_size=config["output_vocab_size"],
-                                          d_model=config["d_model"],
-                                          max_seq_len=config["output_max_seq_len"],
-                                          dropout=config["dropout"])
-        self.encoder = Encoder(config)
+        self.input_embedding = Embedding(config)
+    
         self.decoder = Decoder(config)
         self.cls_net = nn.Sequential(
             nn.Dropout(config["dropout"]),
-            nn.Linear(in_features=config["d_model"], out_features=config["output_vocab_size"])
+            nn.Linear(in_features=config["d_model"], out_features=config["vocab_size"])
         )
+        self.tokenizer = Tokenizer.from_file(config["tokenizer_file_path"])
+        self.device = config["device"]
 
     
-    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, y: Optional[torch.Tensor]=None) -> Tuple[torch.Tensor]:
 
-        encoder_in: torch.Tensor = self.input_embedding(x)
-        decoder_in: torch.Tensor = self.output_embedding(y)
-
-        encoder_out: torch.Tensor = self.encoder(encoder_in)
-        decoder_out: torch.Tensor = self.decoder(encoder_out, decoder_in)
-
+        x = self.input_embedding(x)
+        decoder_out = self.decoder(x)
         logits: torch.Tensor = self.cls_net(decoder_out) # B, K, OUTPUT_VOCAB_SIZE
 
         B, SEQ_LEN, _ = logits.shape
+        loss = None
+        if y is not None:
+            loss = F.cross_entropy(logits.reshape(B*SEQ_LEN, -1), target=y.reshape(B*SEQ_LEN,),
+                                   ignore_index=Tokens.pad_token)
+        
+        return logits, loss
+    
+    @torch.inference_mode()
+    def translate(self, x: str, max_new_tokens: int=20) -> str:
+        x = "<sos>" + x + "<sep>"
 
-        loss = F.cross_entropy(logits.reshape(B*SEQ_LEN, -1), target=y.reshape(B*SEQ_LEN,),
-                               ignore_index=Tokens.pad_token)
-        return loss
+        num_new_tokens = 0
+        tokens = torch.tensor(self.tokenizer.encode(x).ids, dtype=torch.long, device=self.device).unsqueeze(0)
+        while True:
+            logits, _ = self(tokens)
+            probs = F.softmax(logits[:, -1, :], dim=-1)
+            next_token_id = torch.argmax(probs, dim=-1)
+            tokens = torch.cat([tokens, next_token_id.unsqueeze(0)], dim=-1)
+            num_new_tokens += 1
+            if next_token_id==Tokens.eos_token or num_new_tokens>max_new_tokens:
+                break
+        
+
+        return self.tokenizer.decode(list(tokens.numpy()[0]))

@@ -4,3 +4,4 @@ tokenizers==0.15.2
 datasets==2.17.1
 spacy==3.7.4
 torchtext==0.17.1
+tensorboard==2.16.2
