@@ -80,7 +80,7 @@ class MHA(nn.Module):
             attn_outputs = F.softmax(attn_outputs/math.sqrt(self.head_dim))
             attn_outputs = self.dropout(attn_outputs) @ v
         
-        attn_outputs = attn_outputs.contiguous().view(B, T, D_MODEL)
+        attn_outputs = attn_outputs.transpose(1, 2).contiguous().view(B, T, D_MODEL)
         return self.o_proj(attn_outputs)
     
 
