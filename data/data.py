@@ -2,7 +2,7 @@ from torch.utils.data import Dataset, DataLoader
 from tokenizers import Tokenizer
 from datasets import load_dataset
 import torch
-from typing import Tuple, Union, Dict
+from typing import Tuple, Union
 from torch.nn.utils.rnn import pad_sequence
 
 batch_size = 32
@@ -15,40 +15,36 @@ class Tokens:
 
 class LangDataset(Dataset):
 
-    def __init__(self, split: str="train") -> None:
+    def __init__(self, lang1: str, lang2: str, split: str="train") -> None:
         super().__init__()
 
-        self.en_tokenizer = Tokenizer.from_file("tokenizer/en.json")
-        self.fr_tokenizer = Tokenizer.from_file("tokenizer/fr.json")
-        self.dataset = load_dataset("opus_books", "en-fr")["train"].train_test_split(test_size=0.1, shuffle=True, seed=2406)[split]
+        self.lang1 = lang1
+        self.lang2 = lang2
+        self.tokenizer = Tokenizer.from_file(f"tokenizer/{lang1}-{lang2}.json")
+        self.dataset = load_dataset("opus_books", f"{lang1}-{lang2}")["train"].train_test_split(test_size=0.1, shuffle=True, seed=2406)[split]
     
         self._calc_max_seq_len()
 
     def __len__(self):
         return self.dataset.num_rows
 
-    def __getitem__(self, index) -> Tuple[torch.Tensor]:
+    def __getitem__(self, index) -> torch.Tensor:
         
         assert index < self.dataset.num_rows, IndexError(f"{index} must be less than {self.dataset.num_rows}")
+        
+        lang1_sentence = self.dataset[index]["translation"][self.lang1]
+        lang2_sentence = self.dataset[index]["translation"][self.lang2]
+        lang1_sentence = "<sos> " + lang1_sentence + " <eos>"
+        lang2_sentence = "<sos> " + lang2_sentence + " <eos>"
+        tokens = torch.tensor(self.tokenizer.encode(lang1_sentence+lang2_sentence).ids, dtype=torch.long)
 
-        en_sentence = self.dataset[index]["translation"]["en"]
-        fr_sentence = self.dataset[index]["translation"]["fr"]
-        en_sentence = "<sos> " + en_sentence + " <eos>"
-        fr_sentence = "<sos> " + fr_sentence + " <eos>"
-        en_tokens = torch.tensor(self.en_tokenizer.encode(en_sentence).ids, dtype=torch.long)
-        fr_tokens = torch.tensor(self.fr_tokenizer.encode(fr_sentence).ids, dtype=torch.long)
-
-        return en_tokens, fr_tokens
+        return tokens
 
     def _calc_max_seq_len(self):
-        self.lang_max_seq_len = {
-            "en" : 0,
-            "fr" : 0
-        }
+        self.max_seq_len = 0
         for i in range(self.dataset.num_rows):
-            en_tokens, fr_tokens = self[i]
-            self.lang_max_seq_len["en"] = max(self.lang_max_seq_len["en"], en_tokens.shape[0])
-            self.lang_max_seq_len["fr"] = max(self.lang_max_seq_len["fr"], fr_tokens.shape[0])
+            tokens = self[i]
+            self.max_seq_len = max(self.max_seq_len, tokens.shape[0])
 
 
 def collate_fn(batch) -> Tuple[torch.Tensor]:
@@ -63,9 +59,9 @@ def collate_fn(batch) -> Tuple[torch.Tensor]:
     fr = pad_sequence(sequences=fr, batch_first=True, padding_value=Tokens.pad_token)
     return en, fr
 
-def create_dataloader(split: str="train") -> Tuple[Union[DataLoader, Dict[str, int]]]:
+def create_dataloader(lang1: str, lang2: str, split: str="train") -> Tuple[Union[DataLoader, int]]:
 
-    dataset = LangDataset(split=split)
+    dataset = LangDataset(lang1=lang1, lang2=lang2, split=split)
 
     dataloader = DataLoader(
         dataset=dataset,
@@ -75,8 +71,8 @@ def create_dataloader(split: str="train") -> Tuple[Union[DataLoader, Dict[str, i
         drop_last=True
     )
     
-    return dataloader, dataset.lang_max_seq_len
+    return dataloader, dataset.max_seq_len
 
 if __name__ == "__main__":
-    ds = LangDataset(split="train")
-    print(ds[0])
+    dl, max_seq_len = create_dataloader("en", "fr", "train")
+    print(max_seq_len)
