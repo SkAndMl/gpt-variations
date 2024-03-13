@@ -3,7 +3,6 @@ from tokenizers import Tokenizer
 import json
 from models.transformer import TranslateFormer, Tokens
 import torch
-from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from contextlib import nullcontext
 from torch.cuda.amp import autocast, GradScaler
@@ -27,9 +26,10 @@ config["device"] = "cuda" if torch.cuda.is_available() else "cpu"
 
 ctx = autocast(enabled=True, dtype=torch.float16) if torch.cuda.is_available() else nullcontext()
 scaler = GradScaler(enabled=True if torch.cuda.is_available() else False)
-train_steps = 2000
-eval_step = 100
-eval_steps = 200
+train_steps = 40000
+eval_step = 1000
+eval_steps = 2000
+gradient_accumulation_steps = 4
 
 model = TranslateFormer(config=config).to(config["device"])
 optimizer = AdamW(params=model.parameters(), lr=3e-4)
@@ -68,17 +68,20 @@ def train():
     model.train()
     for step in range(1, train_steps+1):
 
-        batch = get_batch()
-        x, y = batch[:, :-1].to(config["device"]), batch[:, 1:].to(config['device'])
-        with ctx:
-            _, loss = model(x, y)
+        for _ in range(gradient_accumulation_steps):
+            batch = get_batch()
+            x, y = batch[:, :-1].to(config["device"]), batch[:, 1:].to(config['device'])
+            with ctx:
+                _, loss = model(x, y)
+            
+            loss /= gradient_accumulation_steps
+            scaler.scale(loss).backward()
+            train_loss += loss.item()
         
-        optimizer.zero_grad(set_to_none=True)
-        scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
-
-        train_loss += loss.item()
+        optimizer.zero_grad(set_to_none=True)
+        
 
         if step%eval_step==0:
             eval_loss = eval_model()
@@ -97,7 +100,7 @@ def train():
             writer.add_scalar('Loss/train', train_loss, step)
             writer.add_scalar('Loss/eval', eval_loss, step)
 
-            print(f"({step}/{train_steps}) train: {train_loss:.4f} eval: {eval_loss:.4f}")
+            print(f"({step*100/train_steps:.2f}%) train: {train_loss:.4f} eval: {eval_loss:.4f}")
             train_loss = 0
     
     writer.close()
