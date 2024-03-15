@@ -34,4 +34,4 @@ def prepare_tokenizer(lang1: str, lang2: str) -> None:
     print(f"{lang1}-{lang2}'s vocab size is: {tokenizer.get_vocab_size()}")
 
 if __name__ == "__main__":
-    prepare_tokenizer(lang1="en", lang2="fr")
+    prepare_tokenizer(lang1="en", lang2="it")

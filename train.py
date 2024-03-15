@@ -1,7 +1,7 @@
 from data.data import LangDataset
 from tokenizers import Tokenizer
 import json
-from models.transformer import TranslateFormer, Tokens
+from models.gpt_translateformer import TranslateFormer, Tokens
 import torch
 from torch.optim import AdamW
 from contextlib import nullcontext
