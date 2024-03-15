@@ -2,11 +2,13 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.cuda.amp import autocast, GradScaler
 from data import LangDataset
 from model import TranslateFormer, Tokens
-from tokenizers import Tokenizer
 import json
 import time
+from contextlib import nullcontext
+from typing import Dict
 
 lang1, lang2 = "en", "it"
 
@@ -17,14 +19,9 @@ with open("config.json", "r") as f:
 train_ds = LangDataset(lang1=lang1, lang2=lang2, split="train")
 test_ds = LangDataset(lang1=lang1, lang2=lang2, split="test")
 
-train_dl = DataLoader(dataset=train_ds,
-                      batch_size=config["batch_size"],
-                      shuffle=True)
-test_dl = DataLoader(dataset=test_ds,
-                     batch_size=config["batch_size"])
-
-
-device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+device = "cuda" if torch.cuda.is_available() else "cpu"
+ctx = autocast(enabled=True, dtype=torch.float16) if device=="cuda" else nullcontext()
+scaler = GradScaler(enabled=True if device=="cuda" else False)
 config["device"] = device
 config["input_vocab_size"] = train_ds.lang1_tokenizer.get_vocab_size()
 config["output_vocab_size"] = train_ds.lang2_tokenizer.get_vocab_size()
@@ -34,58 +31,81 @@ model = TranslateFormer(config=config).to(device)
 optimizer = torch.optim.AdamW(params=model.parameters(), lr=3e-4)
 loss_fn = nn.CrossEntropyLoss(ignore_index=Tokens.pad_token)
 
+def get_batch(split:str="train") -> Dict[str, torch.Tensor]:
+    data = train_ds if split=="train" else test_ds
+    idxs = torch.randint(low=0, high=len(data)-1, size=(config["batch_size"],))
+    batch = {
+        "encoder_input" : [],
+        "decoder_input" : [],
+        "label" : [],
+        "encoder_mask" : [],
+        "decoder_mask" : []
+    }
+    for idx in idxs:
+        batch["encoder_input"].append(data[idx.item()]["encoder_input"])
+        batch["decoder_input"].append(data[idx.item()]["decoder_input"])
+        batch["label"].append(data[idx.item()]["label"])
+        batch["encoder_mask"].append(data[idx.item()]["encoder_mask"])
+        batch["decoder_mask"].append(data[idx.item()]["decoder_mask"])
 
-def train_step() -> float:
-    model.train()
-    train_loss = 0
-    for batch_idx, batch in enumerate(train_dl):
+    batch["encoder_input"] = torch.stack(batch["encoder_input"], dim=0).to(config["device"])
+    batch["decoder_input"] = torch.stack(batch["decoder_input"], dim=0).to(config["device"])
+    batch["label"] = torch.stack(batch["label"], dim=0).to(config["device"])
+    batch["encoder_mask"] = torch.stack(batch["encoder_mask"], dim=0).to(config["device"])
+    batch["decoder_mask"] = torch.stack(batch["decoder_mask"], dim=0).to(config["device"])
 
-        encoder_input: torch.Tensor = batch["encoder_input"].to(config["device"])
-        decoder_input: torch.Tensor = batch["decoder_input"].to(config["device"])
-        label: torch.Tensor = batch["label"].to(config["device"])
-        encoder_mask: torch.Tensor = batch["encoder_mask"].to(config["device"])
-        decoder_mask: torch.Tensor = batch["decoder_mask"].to(config["device"])
+    return batch
 
-        B, SEQ_LEN = label.shape
-        logits: torch.Tensor = model(encoder_input, decoder_input, encoder_mask, decoder_mask) # B, SEQ_LEN, OUTPUT_VOCAB_SIZE
-        loss = loss_fn(logits.view((B*SEQ_LEN, -1)), label.view((B*SEQ_LEN,)))
-        
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
 
-        train_loss += loss.item()
-    
-    return train_loss/len(train_dl)
-
+@torch.inference_mode()
 def eval_step() -> float:
     model.eval()
     eval_loss = 0
-    for batch_idx, batch in enumerate(test_dl):
+    for step in range(config["eval_steps"]):
 
-        encoder_input: torch.Tensor = batch["encoder_input"].to(config["device"])
-        decoder_input: torch.Tensor = batch["decoder_input"].to(config["device"])
-        label: torch.Tensor = batch["label"].to(config["device"])
-        encoder_mask: torch.Tensor = batch["encoder_mask"].to(config["device"])
-        decoder_mask: torch.Tensor = batch["decoder_mask"].to(config["device"])
+        batch = get_batch("test")
 
-        B, SEQ_LEN = label.shape
-
-        logits: torch.Tensor = model(encoder_input, decoder_input, encoder_mask, decoder_mask) # B, SEQ_LEN, OUTPUT_VOCAB_SIZE
-
-        loss = loss_fn(logits.view((B*SEQ_LEN, -1)), label.view((B*SEQ_LEN,)))
+        with ctx:
+            logits = model(batch["encoder_input"],
+                           batch["decoder_input"],
+                           batch["encoder_mask"],
+                           batch["decoder_mask"])
+            B, SEQ_LEN, _ = logits.shape
+            loss = loss_fn(logits.view((B*SEQ_LEN, -1)), batch["label"].view((B*SEQ_LEN,)))
+        
         eval_loss += loss.item()
     
-    return eval_loss/len(test_dl)
-
+    return eval_loss/config["eval_steps"]
 
 
 def train():
     start = time.time()
-    for epoch in range(1, config["epochs"]+1):
-        train_loss = train_step()
-        eval_loss = eval_step()
-        print(f"({epoch}/{config['epochs']}) train: {train_loss:.4f} eval: {eval_loss:.4f} ({time.time()-start:.2f}s)")
+    train_loss = 0
+    for step in range(1, config["train_steps"]+1):
+
+        batch = get_batch(split="train")
+        with ctx:
+            logits = model(batch["encoder_input"],
+                           batch["decoder_input"],
+                           batch["encoder_mask"],
+                           batch["decoder_mask"])
+            B, SEQ_LEN, _ = logits.shape
+            loss = loss_fn(logits.view((B*SEQ_LEN, -1)), batch["label"].view((B*SEQ_LEN,)))
+        
+        optimizer.zero_grad(set_to_none=True)
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
+        train_loss += loss.item()
+
+        if step%config["eval_step"]==0:
+            eval_loss = eval_step()
+            train_loss = train_loss/config["eval_step"]
+            print(f"{step}/{config['steps']} train: {train_loss:.4f} eval: {eval_loss:.4f} ({time.time()-start:.2f}s)")
+            
+            train_loss = 0
+            model.train()
 
 
 if __name__ == "__main__":
