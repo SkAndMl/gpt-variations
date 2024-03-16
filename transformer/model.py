@@ -2,6 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import math
+from typing import Optional
 
 class Tokens:
 
@@ -61,27 +62,28 @@ class MHA(nn.Module):
                 value: torch.Tensor, 
                 mask: torch.Tensor=None) -> torch.Tensor:
         
-        B, SEQ_LEN, D_MODEL = query.shape
+        B, Q_LEN, D_MODEL = query.shape
+        _, K_LEN, _ = key.shape
         head_dim = D_MODEL//self.config["n_heads"]
 
         q: torch.Tensor = self.q_proj(query)
         k: torch.Tensor = self.k_proj(key)
         v: torch.Tensor = self.v_proj(value)
 
-        q = q.view(B, SEQ_LEN, self.config["n_heads"], head_dim).transpose(1, 2) # B, N_HEADS, SEQ_LEN, HEAD_DIM
-        k = k.view(B, SEQ_LEN, self.config["n_heads"], head_dim).transpose(1, 2)
-        v = v.view(B, SEQ_LEN, self.config["n_heads"], head_dim).transpose(1, 2)
+        q = q.view(B, Q_LEN, self.config["n_heads"], head_dim).transpose(1, 2) # B, N_HEADS, Q_LEN, HEAD_DIM
+        k = k.view(B, K_LEN, self.config["n_heads"], head_dim).transpose(1, 2)
+        v = v.view(B, K_LEN, self.config["n_heads"], head_dim).transpose(1, 2)
 
-        attn_weights = q@k.transpose(-1, -2) # B, N_HEADS, SEQ_LEN, SEQ_LEN
+        attn_weights = q@k.transpose(-1, -2) # B, N_HEADS, Q_LEN, K_LEN
         attn_weights /= math.sqrt(head_dim)
         
         if mask is not None:
             attn_weights.masked_fill_(mask==0, value=float("-inf"))
         
         attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_weights = self.dropout(attn_weights)@v # B, N_HEADS, SEQ_LEN, HEAD_DIM
+        attn_weights = self.dropout(attn_weights)@v # B, N_HEADS, Q_LEN, HEAD_DIM
 
-        attn_weights = attn_weights.transpose(1, 2).contiguous().view(B, SEQ_LEN, D_MODEL)
+        attn_weights = attn_weights.transpose(1, 2).contiguous().view(B, Q_LEN, D_MODEL)
         return self.o_proj(attn_weights)
 
 
@@ -185,6 +187,8 @@ class TranslateFormer(nn.Module):
         
         super().__init__()
 
+        self.config = config
+
         self.encoder_embedding = Embedding(config=config, vocab_size=config["input_vocab_size"])
         self.decoder_embedding = Embedding(config=config, vocab_size=config["output_vocab_size"])
         self.encoder = Encoder(config=config)
@@ -195,7 +199,7 @@ class TranslateFormer(nn.Module):
                 encoder_input: torch.Tensor,
                 decoder_input: torch.Tensor,
                 encoder_mask: torch.Tensor,
-                decoder_mask: torch.Tensor) -> torch.Tensor:
+                decoder_mask: Optional[torch.Tensor]=None) -> torch.Tensor:
         
         # encoder_input -> B, SEQ_LEN
         # decoder_input -> B, SEQ_LEN
@@ -208,3 +212,18 @@ class TranslateFormer(nn.Module):
 
         logits: torch.Tensor = self.cls_layer(decoder_output)
         return logits
+
+    @torch.inference_mode()
+    def translate(self, input_tokens: torch.Tensor, encoder_mask: torch.Tensor, max_len: int=300) -> str:
+        
+        if len(input_tokens.shape) < 2:
+            input_tokens.unsqueeze_(0)
+        
+        output_tokens = torch.tensor([Tokens.sos_token], dtype=torch.long, device=self.config["device"]).unsqueeze(0)
+
+        while output_tokens[0,-1].item() != Tokens.eos_token and output_tokens.shape[-1]<max_len:
+            logits: torch.Tensor = self(input_tokens, output_tokens, encoder_mask)
+            pred_id = torch.argmax(logits, dim=-1)
+            output_tokens = torch.cat([output_tokens, pred_id], dim=-1)
+        
+        return self.config["lang2_tokenizer"].decode(list(output_tokens.cpu().numpy())[0])

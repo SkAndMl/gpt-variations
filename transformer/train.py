@@ -9,6 +9,7 @@ import json
 import time
 from contextlib import nullcontext
 from typing import Dict
+import random
 
 lang1, lang2 = "en", "it"
 
@@ -25,6 +26,8 @@ scaler = GradScaler(enabled=True if device=="cuda" else False)
 config["device"] = device
 config["input_vocab_size"] = train_ds.lang1_tokenizer.get_vocab_size()
 config["output_vocab_size"] = train_ds.lang2_tokenizer.get_vocab_size()
+config["lang1_tokenizer"] = train_ds.lang1_tokenizer
+config["lang2_tokenizer"] = train_ds.lang2_tokenizer
 config["seq_len"] = train_ds.max_seq_len
 
 model = TranslateFormer(config=config).to(device)
@@ -102,8 +105,20 @@ def train():
         if step%config["eval_step"]==0:
             eval_loss = eval_step()
             train_loss = train_loss/config["eval_step"]
-            print(f"{step}/{config['steps']} train: {train_loss:.4f} eval: {eval_loss:.4f} ({time.time()-start:.2f}s)")
+            print(f"{step}/{config['train_steps']} train: {train_loss:.4f} eval: {eval_loss:.4f} ({time.time()-start:.2f}s)")
             
+            rand_idx = random.randint(0, len(test_ds)-1)
+            sample = test_ds[rand_idx]
+            input_sentence, output_sentence = test_ds.ds["test"][rand_idx]["translation"][lang1], \
+                                              test_ds.ds["test"][rand_idx]["translation"][lang2]
+            
+            translation: str = model.translate(input_tokens=sample["encoder_input"].to(device),
+                                               encoder_mask=sample["encoder_mask"].to(device))
+            print(f"<= {input_sentence}")
+            print(f"== {output_sentence}")
+            print(f"=> {translation}")
+            print("-"*100)
+
             train_loss = 0
             model.train()
 
