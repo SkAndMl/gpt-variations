@@ -3,36 +3,34 @@ from tokenizers import Tokenizer
 import json
 from model import TranslateFormer, Tokens
 import torch
-from torch.optim import AdamW
+from torch.optim import Adam
 from contextlib import nullcontext
 from torch.cuda.amp import autocast, GradScaler
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 
-lang1, lang2 = "en", "fr"
-
-tokenizer = Tokenizer.from_file(f"{lang1}-{lang2}.json")
-
 with open("config.json", "r") as f:
     config = json.loads(f.read())
 
-train_ds = LangDataset(lang1, lang2, "train")
-test_ds = LangDataset(lang1, lang2, "test")
+tokenizer: Tokenizer = Tokenizer.from_file(f"{config['lang1']}-{config['lang2']}.json")
+
+train_ds = LangDataset(config["lang1"], config["lang2"], "train")
+test_ds = LangDataset(config["lang1"], config["lang2"], "test")
 
 config["vocab_size"] = tokenizer.get_vocab_size()
-config["max_seq_len"] = LangDataset.calc_max_seq_len(lang1, lang2)
+config["seq_len"] = LangDataset.calc_max_seq_len(config["lang1"], config["lang2"])
 config["device"] = "cuda" if torch.cuda.is_available() else "cpu"
 
 ctx = autocast(enabled=True, dtype=torch.float16) if torch.cuda.is_available() else nullcontext()
 scaler = GradScaler(enabled=True if torch.cuda.is_available() else False)
-train_steps = 40000
+train_steps = 10000
 eval_step = 1000
-eval_steps = 2000
-gradient_accumulation_steps = 4
+eval_steps = 1000
+gradient_accumulation_steps = 2
 
 model = TranslateFormer(config=config).to(config["device"])
-optimizer = AdamW(params=model.parameters(), lr=3e-4)
+optimizer = Adam(params=model.parameters(), lr=config["initial_lr"], weight_decay=config["weight_decay"])
 
 def save_checkpoint(state, filename="checkpoint.pt"):
     torch.save(state, filename)

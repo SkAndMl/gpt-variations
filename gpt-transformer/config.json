@@ -1,8 +1,12 @@
 {
+    "lang1" : "en",
+    "lang2" : "fr",
     "batch_size" : 16,
     "n_layers" : 8,
     "d_model" : 768,
     "n_heads" : 12,
     "dropout" : 0.0,
-    "tokenizer_file_path" : "tokenizer/en-fr.json"
+    "tokenizer_file_path" : "en-fr.json",
+    "initial_lr" : 3e-4,
+    "weight_decay" : 1e-3
 }

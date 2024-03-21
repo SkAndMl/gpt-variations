@@ -56,29 +56,23 @@ class MHA(nn.Module):
         self.o_proj = nn.Linear(in_features=self.d_model, out_features=self.d_model)
         self.dropout = nn.Dropout(p=self.dropout_p)
 
-        self.flash = hasattr(torch.nn.functional, "scaled_dot_product_attention")
 
-        if not self.flash:
-            mask = torch.ones(size=(1, 1, config["seq_len"], config["seq_len"])).tril(diagonal=0)
-            self.register_buffer(name="mask", tensor=mask)
+        mask = torch.ones(size=(1, 1, config["seq_len"], config["seq_len"]), dtype=torch.bool).tril(diagonal=0)
+        self.register_buffer(name="mask", tensor=mask)
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
         B, T, D_MODEL = x.shape
         q, k, v = self.proj(x).split(D_MODEL, dim=2) # B, T, D_MODEL
-        q = q.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2) 
-        k = k.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        v = v.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-
-        if self.flash:
-            attn_outputs: torch.Tensor = F.scaled_dot_product_attention(query=q, key=k, value=v,
-                                                          is_causal=True, dropout_p=self.dropout_p)
-        else:
-            attn_outputs: torch.Tensor = q @ k.transpose(-2, -1)
-            attn_outputs = attn_outputs.masked_fill(self.mask[:, :, :T, :T].logical_not(), value=float("-inf"))
-            attn_outputs = F.softmax(attn_outputs/math.sqrt(self.head_dim))
-            attn_outputs = self.dropout(attn_outputs) @ v
+        q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2) 
+        k = k.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        v = v.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        
+        attn_outputs: torch.Tensor = (q @ k.transpose(-2, -1))*(1/math.sqrt(k.size(-1)))
+        attn_outputs = attn_outputs.masked_fill(self.mask[:, :, :T, :T]==0, value=float("-inf"))
+        attn_outputs = F.softmax(attn_outputs, dim=-1)
+        attn_outputs = self.dropout(attn_outputs) @ v
         
         attn_outputs = attn_outputs.transpose(1, 2).contiguous().view(B, T, D_MODEL)
         return self.o_proj(attn_outputs)
