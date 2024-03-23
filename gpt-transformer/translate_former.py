@@ -64,7 +64,7 @@ class ParallelTranslateFormer(nn.Module):
         config["n_layers"] //= 2
         self.decoder_1 = Decoder(config)
         self.decoder_2 = Decoder(config)
-        self.weight = nn.Parameter(data=0.5, requires_grad=True)
+        self.weight = nn.Parameter(data=torch.tensor(0.5), requires_grad=True)
         self.cls_net = nn.Sequential(
             nn.Dropout(config["dropout"]),
             nn.Linear(in_features=config["d_model"], out_features=config["vocab_size"])
@@ -105,4 +105,3 @@ class ParallelTranslateFormer(nn.Module):
         
 
         return self.tokenizer.decode(list(tokens.numpy()[0]))    
-

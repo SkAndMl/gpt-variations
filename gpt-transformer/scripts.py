@@ -139,5 +139,3 @@ def initialize_weights(m):
     elif isinstance(m, nn.LayerNorm):
         nn.init.constant_(m.weight, 1)
         nn.init.constant_(m.bias, 0)
-    
-    logging.info("Initialized model")
