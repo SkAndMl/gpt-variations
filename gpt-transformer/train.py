@@ -1,8 +1,10 @@
 from data import LangDataset
 from tokenizers import Tokenizer
 import json
-from model import TranslateFormer, Tokens
+from scripts import Tokens, initialize_weights
+from translate_former import TranslateFormer
 import torch
+from torch import nn as nn
 from torch.optim import Adam
 from contextlib import nullcontext
 from torch.cuda.amp import autocast, GradScaler
@@ -30,16 +32,19 @@ eval_steps = 1000
 gradient_accumulation_steps = 2
 
 model = TranslateFormer(config=config).to(config["device"])
+model.apply(initialize_weights)
 optimizer = Adam(params=model.parameters(), lr=config["initial_lr"], weight_decay=config["weight_decay"])
 
 def save_checkpoint(state, filename="checkpoint.pt"):
     torch.save(state, filename)
+
 
 def get_batch(split:str="train") -> torch.Tensor:
     data = train_ds if split=="train" else test_ds
     idxs = torch.randint(low=0, high=len(data)-1, size=(config["batch_size"],))
     batch = [data[idx.item()] for idx in idxs]
     return pad_sequence(batch, batch_first=True, padding_value=Tokens.pad_token)
+
 
 @torch.inference_mode()
 def eval_model() -> float:
