@@ -31,7 +31,7 @@ def prepare_tokenizer(lang1: str, lang2: str) -> None:
             for i in range(books_ds["train"].num_rows):
                 lang1_sentence = "<sos>" + normalize_string(books_ds["train"][i]["translation"][lang1]) + "<sep>"
                 lang2_sentence = normalize_string(books_ds["train"][i]["translation"][lang2]) + "<eos>" + "\n"
-                if len((lang1_sentence+lang1_sentence).split()) <= 30:
+                if len((lang1_sentence+lang1_sentence).split()) <= 20:
                     f.write(lang1_sentence + lang2_sentence)
                     count += 1
     print(f"Number of sentences: {count}")
@@ -40,7 +40,7 @@ def prepare_tokenizer(lang1: str, lang2: str) -> None:
     tokenizer.pre_tokenizer = Whitespace()
 
     special_tokens = ["<pad>", "<sos>", "<eos>", "<unk>", "<sep>"]  
-    trainer = BpeTrainer(special_tokens=special_tokens, min_frequency=2, vocab_size=10000) 
+    trainer = BpeTrainer(special_tokens=special_tokens, min_frequency=2) 
 
     tokenizer.train(files=[f"{lang1}-{lang2}.txt"], trainer=trainer)
     tokenizer.save(path=f"{lang1}-{lang2}.json")

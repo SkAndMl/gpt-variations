@@ -13,7 +13,7 @@ from datetime import datetime
 with open("config.json", "r") as f:
     config = json.loads(f.read())
 
-tokenizer: Tokenizer = Tokenizer.from_file(f"{config['lang1']}-{config['lang2']}.json")
+tokenizer: Tokenizer = Tokenizer.from_file(config['tokenizer_file_path'])
 
 train_ds = LangDataset(config["lang1"], config["lang2"], "train")
 test_ds = LangDataset(config["lang1"], config["lang2"], "test")
@@ -24,7 +24,7 @@ config["device"] = "cuda" if torch.cuda.is_available() else "cpu"
 
 ctx = autocast(enabled=True, dtype=torch.float16) if torch.cuda.is_available() else nullcontext()
 scaler = GradScaler(enabled=True if torch.cuda.is_available() else False)
-train_steps = 10000
+train_steps = 40000
 eval_step = 1000
 eval_steps = 1000
 gradient_accumulation_steps = 2
