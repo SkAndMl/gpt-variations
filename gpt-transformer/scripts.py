@@ -128,6 +128,30 @@ class Decoder(nn.Module):
             x = block(x)
         
         return x
+    
+
+class ConvDecoder(nn.Module):
+
+    def __init__(self, config) -> None:
+
+        super().__init__()
+
+        self.blocks = nn.ModuleList()
+        for _ in range(config["n_layers"]//2):
+            self.blocks.extend([
+                DecoderBlock(config),
+                DecoderBlock(config),
+                nn.Linear(config["d_model"], config["d_model"]//2)
+            ])
+            config["d_model"] //= 2
+            
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        for block in self.blocks:
+            x = block(x)
+        
+        return x
+
 
 def initialize_weights(m):
     if isinstance(m, nn.Linear):
