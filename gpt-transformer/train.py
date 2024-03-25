@@ -2,7 +2,7 @@ from data import LangDataset
 from tokenizers import Tokenizer
 import json
 from scripts import Tokens, initialize_weights
-from translate_former import ParallelTranslateFormer
+from translate_former import PosTranslateFormer
 import torch
 from torch import nn as nn
 from torch.optim import Adam
@@ -34,7 +34,7 @@ eval_step = 1000
 eval_steps = 1000
 gradient_accumulation_steps = 2
 
-model = ParallelTranslateFormer(config=config).to(config["device"])
+model = PosTranslateFormer(config=config).to(config["device"])
 model.apply(initialize_weights)
 logging.info("Initialized model")
 optimizer = Adam(params=model.parameters(), lr=config["initial_lr"], weight_decay=config["weight_decay"])
