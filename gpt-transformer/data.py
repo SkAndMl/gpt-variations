@@ -1,8 +1,8 @@
 from torch.utils.data import Dataset
 from tokenizers import Tokenizer
-from datasets import load_dataset
 import torch
 import random
+import os
 
 class Tokens:
     pad_token = 0
@@ -10,27 +10,41 @@ class Tokens:
     eos_token = 2
     unk_token = 3
     sep_token = 4
+    
+
+def split_data(lang1: str, lang2: str, test_size: float=0.1) -> None:
+
+    with open(f"{lang1}-{lang2}.txt", "r") as f:
+        data = f.readlines()
+        data = [d.strip() for d in data]
+    
+    random.seed(2406)
+    random.shuffle(data)
+
+    split_idx = int(len(data)*test_size)
+    with open(f"{lang1}-{lang2}-test.txt", "w") as f:
+        for d in data[:split_idx]:
+            f.write(d+"\n")
+    
+    with open(f"{lang1}-{lang2}-train.txt", "w") as f:
+        for d in data[split_idx:]:
+            f.write(d+"\n")
 
 class LangDataset(Dataset):
 
-    def __init__(self, lang1: str, lang2: str, split: str="train", test_size: int=0.1) -> None:
+    def __init__(self, lang1: str, lang2: str, split: str="train", test_size: float=0.1) -> None:
         super().__init__()
 
         self.lang1 = lang1
         self.lang2 = lang2
         self.tokenizer: Tokenizer = Tokenizer.from_file(f"{lang1}-{lang2}.json")
         
-        with open(f"{lang1}-{lang2}.txt", "r") as f:
+        if not os.path.exists(f"{lang1}-{lang2}-{split}.txt"):
+            split_data(lang1, lang2, test_size)
+        
+        with open(f"{lang1}-{lang2}-{split}.txt", "r") as f:
             data = f.readlines()
             data = [d.strip() for d in data]
-            
-            random.seed(2406)
-            if split=="train":
-                idxs = random.sample(list(range(len(data))), k=int(len(data)*(1-test_size)))
-            else:
-                idxs = random.sample(list(range(len(data))), k=int(len(data)*test_size))
-            
-            data = [data[idx] for idx in idxs]
         
         self.data = data
     

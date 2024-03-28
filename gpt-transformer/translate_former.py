@@ -38,22 +38,24 @@ class TranslateFormer(nn.Module):
         return logits, loss
     
     @torch.inference_mode()
-    def translate(self, x: str, max_new_tokens: int=20) -> str:
+    def translate(self, x: str, max_len: int=20) -> str:
         x = "<sos>" + x + "<sep>"
+        tokens = torch.tensor([self.tokenizer.encode(x).ids], dtype=torch.long, requires_grad=False,
+                              device=self.device)
 
-        num_new_tokens = 0
-        tokens = torch.tensor(self.tokenizer.encode(x).ids, dtype=torch.long, device=self.device).unsqueeze(0)
-        while True:
-            logits, _ = self(tokens)
-            probs = F.softmax(logits[:, -1, :], dim=-1)
-            next_token_id = torch.argmax(probs, dim=-1)
-            tokens = torch.cat([tokens, next_token_id.unsqueeze(0)], dim=-1)
-            num_new_tokens += 1
-            if next_token_id==Tokens.eos_token or num_new_tokens>max_new_tokens:
-                break
+        while tokens[-1, -1].item() != Tokens.eos_token and tokens.size(-1)<max_len:
+
+            logits, _ = self(tokens) # B, T+1, VOCAB_SIZE
+            max_token_id = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True).to(self.device)
+
+            tokens = torch.cat([tokens, max_token_id], dim=-1)
         
-
-        return self.tokenizer.decode(list(tokens.numpy()[0]))
+        op: str = self.tokenizer.decode(list(tokens.detach().cpu().numpy()[0]), skip_special_tokens=False)
+        sep_idx = op.find("<sep>")
+        predicted = op[sep_idx+5:]
+        if "<eos>" in predicted:
+            predicted = predicted[:-5]
+        return predicted.strip()
     
 
 class ParallelTranslateFormer(nn.Module):
@@ -90,22 +92,24 @@ class ParallelTranslateFormer(nn.Module):
         return logits, loss
     
     @torch.inference_mode()
-    def translate(self, x: str, max_new_tokens: int=20) -> str:
+    def translate(self, x: str, max_len: int=20) -> str:
         x = "<sos>" + x + "<sep>"
+        tokens = torch.tensor([self.tokenizer.encode(x).ids], dtype=torch.long, requires_grad=False,
+                              device=self.device)
 
-        num_new_tokens = 0
-        tokens = torch.tensor(self.tokenizer.encode(x).ids, dtype=torch.long, device=self.device).unsqueeze(0)
-        while True:
-            logits, _ = self(tokens)
-            probs = F.softmax(logits[:, -1, :], dim=-1)
-            next_token_id = torch.argmax(probs, dim=-1)
-            tokens = torch.cat([tokens, next_token_id.unsqueeze(0)], dim=-1)
-            num_new_tokens += 1
-            if next_token_id==Tokens.eos_token or num_new_tokens>max_new_tokens:
-                break
+        while tokens[-1, -1].item() != Tokens.eos_token and tokens.size(-1)<max_len:
+
+            logits, _ = self(tokens) # B, T+1, VOCAB_SIZE
+            max_token_id = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True).to(self.device)
+
+            tokens = torch.cat([tokens, max_token_id], dim=-1)
         
-
-        return self.tokenizer.decode(list(tokens.numpy()[0]))    
+        op: str = self.tokenizer.decode(list(tokens.detach().cpu().numpy()[0]), skip_special_tokens=False)
+        sep_idx = op.find("<sep>")
+        predicted = op[sep_idx+5:]
+        if "<eos>" in predicted:
+            predicted = predicted[:-5]
+        return predicted.strip()
     
 
 class ConvTranslateFormer(nn.Module):
@@ -140,22 +144,24 @@ class ConvTranslateFormer(nn.Module):
         return logits, loss
     
     @torch.inference_mode()
-    def translate(self, x: str, max_new_tokens: int=20) -> str:
+    def translate(self, x: str, max_len: int=20) -> str:
         x = "<sos>" + x + "<sep>"
+        tokens = torch.tensor([self.tokenizer.encode(x).ids], dtype=torch.long, requires_grad=False,
+                              device=self.device)
 
-        num_new_tokens = 0
-        tokens = torch.tensor(self.tokenizer.encode(x).ids, dtype=torch.long, device=self.device).unsqueeze(0)
-        while True:
-            logits, _ = self(tokens)
-            probs = F.softmax(logits[:, -1, :], dim=-1)
-            next_token_id = torch.argmax(probs, dim=-1)
-            tokens = torch.cat([tokens, next_token_id.unsqueeze(0)], dim=-1)
-            num_new_tokens += 1
-            if next_token_id==Tokens.eos_token or num_new_tokens>max_new_tokens:
-                break
+        while tokens[-1, -1].item() != Tokens.eos_token and tokens.size(-1)<max_len:
+
+            logits, _ = self(tokens) # B, T+1, VOCAB_SIZE
+            max_token_id = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True).to(self.device)
+
+            tokens = torch.cat([tokens, max_token_id], dim=-1)
         
-
-        return self.tokenizer.decode(list(tokens.numpy()[0]))
+        op: str = self.tokenizer.decode(list(tokens.detach().cpu().numpy()[0]), skip_special_tokens=False)
+        sep_idx = op.find("<sep>")
+        predicted = op[sep_idx+5:]
+        if "<eos>" in predicted:
+            predicted = predicted[:-5]
+        return predicted.strip()
     
 
 class PosTranslateFormer(nn.Module):
@@ -189,19 +195,21 @@ class PosTranslateFormer(nn.Module):
         return logits, loss
     
     @torch.inference_mode()
-    def translate(self, x: str, max_new_tokens: int=20) -> str:
+    def translate(self, x: str, max_len: int=20) -> str:
         x = "<sos>" + x + "<sep>"
+        tokens = torch.tensor([self.tokenizer.encode(x).ids], dtype=torch.long, requires_grad=False,
+                              device=self.device)
 
-        num_new_tokens = 0
-        tokens = torch.tensor(self.tokenizer.encode(x).ids, dtype=torch.long, device=self.device).unsqueeze(0)
-        while True:
-            logits, _ = self(tokens)
-            probs = F.softmax(logits[:, -1, :], dim=-1)
-            next_token_id = torch.argmax(probs, dim=-1)
-            tokens = torch.cat([tokens, next_token_id.unsqueeze(0)], dim=-1)
-            num_new_tokens += 1
-            if next_token_id==Tokens.eos_token or num_new_tokens>max_new_tokens:
-                break
+        while tokens[-1, -1].item() != Tokens.eos_token and tokens.size(-1)<max_len:
+
+            logits, _ = self(tokens) # B, T+1, VOCAB_SIZE
+            max_token_id = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True).to(self.device)
+
+            tokens = torch.cat([tokens, max_token_id], dim=-1)
         
-
-        return self.tokenizer.decode(list(tokens.numpy()[0]))
+        op: str = self.tokenizer.decode(list(tokens.detach().cpu().numpy()[0]), skip_special_tokens=False)
+        sep_idx = op.find("<sep>")
+        predicted = op[sep_idx+5:]
+        if "<eos>" in predicted:
+            predicted = predicted[:-5]
+        return predicted.strip()
