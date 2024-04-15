@@ -20,7 +20,7 @@ class Embedding(nn.Module):
         self.device = config["device"]
 
         self.token_embedding = nn.Embedding(num_embeddings=self.vocab_size, embedding_dim=self.d_model)
-        self.pos_embedding = nn.Embedding(num_embeddings=self.seq_len, embedding_dim=self.d_model)
+        self.pos_embedding = nn.Embedding(num_embeddings=self.context_length, embedding_dim=self.d_model)
         self.dropout = nn.Dropout(p=config["dropout"])
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:

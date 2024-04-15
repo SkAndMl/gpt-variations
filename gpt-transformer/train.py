@@ -29,17 +29,20 @@ itos = {i:ch for i,ch in enumerate(chars)}
 encode = lambda s: [stoi[ch] for ch in s]
 decode = lambda l: "".join([itos[i] for i in l])
 
+config["vocab_size"] = vocab_size
+config["device"] = device
+
 data = torch.tensor(encode(data))
 
 train_data = data[:train_len]
 val_data = data[train_len:]
 
 if model_name.startswith("parallel"):
-    gpt = ParallelGPT(config=config, vocab_size=vocab_size)
+    gpt = ParallelGPT(config=config)
 elif model_name.startswith("conv"):
-    gpt = ConvGPT(config=config, vocab_size=vocab_size)
+    gpt = ConvGPT(config=config)
 else:
-    gpt = VanillaGPT(config=config, vocab_size=vocab_size)
+    gpt = VanillaGPT(config=config)
 
 gpt = gpt.to(device)
 optimizer = torch.optim.AdamW(params=gpt.parameters(),
@@ -54,7 +57,7 @@ def get_random_batch(split: str="train") -> Tuple[torch.Tensor, torch.Tensor]:
     data = train_data if split=="train" else val_data
 
     batch_size = config["batch_size"]
-    block_size = config["block_size"]
+    block_size = config["context_length"]
 
     idxs = torch.randint(0, len(data)-block_size, size=(batch_size,))
     x_batch = torch.stack([data[i:i+block_size] for i in idxs])
