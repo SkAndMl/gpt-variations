@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 
 checkpoints
+files_to_share

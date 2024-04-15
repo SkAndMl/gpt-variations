@@ -1,186 +1,123 @@
-from data import LangDataset
-from tokenizers import Tokenizer
-import json
-from scripts import Tokens, initialize_weights
-from translate_former import PosTranslateFormer, ConvTranslateFormer
-from translate_former import ParallelTranslateFormer, TranslateFormer
 import torch
-from torch import nn as nn
-from torch.optim import Adam
+from typing import Tuple, Dict
+import json
+from torch.cuda.amp import GradScaler, autocast
 from contextlib import nullcontext
-from torch.cuda.amp import autocast, GradScaler
-from torch.nn.utils.rnn import pad_sequence
-from torchmetrics.text import BLEUScore, WordErrorRate, CharErrorRate
-from torch.utils.tensorboard import SummaryWriter
-import logging
-import random
+from torch.utils.tensorboard.writer import SummaryWriter
+import os
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from model import VanillaGPT, ParallelGPT, ConvGPT
 
-model_name = "translateformer"
-log_dir = f'tensorboard_results/{model_name}'
-writer = SummaryWriter(log_dir)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+ctx = autocast(enabled=True, dtype=torch.float16) if device=="cuda" else nullcontext()
+model_name = "vanillagpt" # "parallelgpt", "convgpt"
 
 with open("config.json", "r") as f:
-    config = json.loads(f.read())
+    config = json.load(f)
 
-tokenizer: Tokenizer = Tokenizer.from_file(config['tokenizer_file_path'])
+with open("train.txt", "r", encoding="utf-8") as train_file, open("valid.txt", "r", encoding="utf-8") as valid_file:
+    train_data, valid_data = train_file.read(), valid_file.read()
+    data = train_data + valid_data
+    train_len = len(train_data)
 
-train_ds = LangDataset(config["lang1"], config["lang2"], "train")
-test_ds = LangDataset(config["lang1"], config["lang2"], "test")
 
-config["vocab_size"] = tokenizer.get_vocab_size()
-config["seq_len"] = LangDataset.calc_max_seq_len(config["lang1"], config["lang2"])
-config["device"] = "cuda" if torch.cuda.is_available() else "cpu"
+chars = sorted(list(set(data)))
+vocab_size = len(chars)
+stoi = {ch:i for i,ch in enumerate(chars)}
+itos = {i:ch for i,ch in enumerate(chars)}
 
-ctx = autocast(enabled=True, dtype=torch.float16) if torch.cuda.is_available() else nullcontext()
-scaler = GradScaler(enabled=True if torch.cuda.is_available() else False)
-train_steps = 40000
-eval_step = 1000
-eval_steps = 1000
-gradient_accumulation_steps = 2
+encode = lambda s: [stoi[ch] for ch in s]
+decode = lambda l: "".join([itos[i] for i in l])
 
-if model_name.startswith("pos"):
-    model = PosTranslateFormer(config=config)
+data = torch.tensor(encode(data))
+
+train_data = data[:train_len]
+val_data = data[train_len:]
+
+if model_name.startswith("parallel"):
+    gpt = ParallelGPT(config=config, vocab_size=vocab_size)
 elif model_name.startswith("conv"):
-    model = ConvTranslateFormer(config=config)
-elif model_name.startswith("par"):
-    model = ParallelTranslateFormer(config=config)
+    gpt = ConvGPT(config=config, vocab_size=vocab_size)
 else:
-    model = TranslateFormer(config=config)
+    gpt = VanillaGPT(config=config, vocab_size=vocab_size)
 
-model = model.to(config["device"])
-model.apply(initialize_weights)
-logging.info("Initialized model")
-optimizer = Adam(params=model.parameters(), lr=config["initial_lr"], weight_decay=config["weight_decay"])
-
-bleu = BLEUScore()
-wer = WordErrorRate()
-cer = CharErrorRate()
+gpt = gpt.to(device)
+optimizer = torch.optim.AdamW(params=gpt.parameters(),
+                              lr=config["learning_rate"],
+                              weight_decay=config["weight_decay"])
+scaler = GradScaler(enabled=True)
+writer = SummaryWriter(log_dir=f"runs/{model_name}")
 
 
-def log_results(train_loss: float, eval_loss: float, step: int) -> None:
+def get_random_batch(split: str="train") -> Tuple[torch.Tensor, torch.Tensor]:
 
-    rand_idx = random.sample(range(0, len(test_ds)), k=1)[0]
-    sample: str = test_ds.data[rand_idx]
-    sep_idx = sample.find("<sep>")
+    data = train_data if split=="train" else val_data
+
+    batch_size = config["batch_size"]
+    block_size = config["block_size"]
+
+    idxs = torch.randint(0, len(data)-block_size, size=(batch_size,))
+    x_batch = torch.stack([data[i:i+block_size] for i in idxs])
+    y_batch = torch.stack([data[i+1:i+block_size+1] for i in idxs])
+
+    x_batch, y_batch = x_batch.to(device), y_batch.to(device)
+    return x_batch, y_batch
+
+
+@torch.no_grad()
+def eval_model() -> Dict[str, float]:
+    losses = {}
+    gpt.eval()
+
+    for split in ["train", "val"]:
+        loss = 0
+        for _ in range(config["eval_iters"]):
+            x_batch, y_batch = get_random_batch(split)
+            
+            with ctx:
+                _, l_ = gpt(x_batch, y_batch)
+            
+            loss += l_.item()
+        
+        losses[split] = loss/config["eval_iters"]
     
-    src, tgt = sample[5:sep_idx], sample[sep_idx+5:-5]
-    src, tgt = src.strip(), tgt.strip()
-
-    pred = model.translate(x=src)
-    
-    bleu.update([pred], [[tgt]])
-    wer.update([pred], [tgt])
-    cer.update([pred], [tgt])
-
-    bleu_score: float = bleu.compute().item()
-    wer_score: float = wer.compute().item()
-    cer_score: float = cer.compute().item()
-
-    bleu.reset()
-    wer.reset()
-    cer.reset()
-
-    ## add losses to tensorboard
-    writer.add_scalar(
-        tag = "Loss/train", 
-        scalar_value=train_loss,
-        global_step=step
-    )
-    writer.add_scalar(
-        tag = "Loss/test", 
-        scalar_value=eval_loss,
-        global_step=step
-    )
-
-    ## add metrics to tensorboard
-    writer.add_scalar(
-        tag="Metric/bleu",
-        scalar_value=bleu_score,
-        global_step=step
-    )
-    writer.add_scalar(
-        tag="Metric/wer",
-        scalar_value=wer_score,
-        global_step=step
-    )
-    writer.add_scalar(
-        tag="Metric/cer",
-        scalar_value=cer_score,
-        global_step=step
-    )
-
-
-def save_checkpoint(state, filename="checkpoint.pt"):
-    torch.save(state, filename)
-
-
-def get_batch(split:str="train") -> torch.Tensor:
-    data = train_ds if split=="train" else test_ds
-    idxs = torch.randint(low=0, high=len(data)-1, size=(config["batch_size"],))
-    batch = [data[idx.item()] for idx in idxs]
-    return pad_sequence(batch, batch_first=True, padding_value=Tokens.pad_token)
-
-
-@torch.inference_mode()
-def eval_model() -> float:
-    model.eval()
-    batch = get_batch(split="test")
-    x, y = batch[:, :-1].to(config["device"]), batch[:, 1:].to(config["device"])
-    eval_loss = 0
-    for _ in range(eval_steps):
-        with ctx:
-            _, loss = model(x, y)
-        eval_loss += loss.item()
-    model.train()
-    return eval_loss/eval_steps
+    gpt.train()
+    return losses
 
 
 def train():
-    train_loss = 0
-    best_eval_loss = float("inf")
+    gpt.train()
+    for iter in range(1, config["train_iters"]+1):
 
-    model.train()
-    for step in range(1, train_steps+1):
+        if iter%config["eval_interval"]==0:
+            losses = eval_model()
 
-        for _ in range(gradient_accumulation_steps):
-            batch = get_batch()
-            x, y = batch[:, :-1].to(config["device"]), batch[:, 1:].to(config['device'])
-            with ctx:
-                _, loss = model(x, y)
-            
-            loss /= gradient_accumulation_steps
-            scaler.scale(loss).backward()
-            train_loss += loss.item()
+            for k in losses:
+                writer.add_scalar(tag=f"loss/{k}",
+                                  scalar_value=losses[k],
+                                  global_step=iter)
+
+            print(f"iter {iter} train_loss: {losses['train']} val_loss: {losses['val']}")
         
+        x_batch, y_batch = get_random_batch()
+    
+        with ctx:
+            _, loss = gpt(x_batch, y_batch)
+
+        scaler.scale(loss).backward()  
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
-        
 
-        if step%eval_step==0:
-            eval_loss = eval_model()
-            train_loss /= eval_step
+    if not os.path.exists("checkpoints/"):
+      os.mkdir("checkpoints")
 
-            if eval_loss < best_eval_loss:
-                best_eval_loss = eval_loss
-                save_checkpoint({
-                    'epoch': step // eval_step,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': eval_loss,
-                }, filename=f'{model_name}_cp.pt')
+    torch.save(gpt.state_dict(),
+               f=f"checkpoints/{model_name}.pt")
 
-
-            log_results(train_loss, eval_loss, step)
-
-            print(f"({step*100/train_steps:.2f}%) train: {train_loss:.4f} eval: {eval_loss:.4f}")
-            train_loss = 0
-    
-    writer.close()
 
 if __name__ == "__main__":
-    params = sum([p.numel() for p in model.parameters() if p.requires_grad])
-    print(f"Params: {params/1000000:.3f}M")
+    params = sum([torch.numel(p) for p in gpt.parameters() if p.requires_grad])
+    print(f"Params: {params/1000000:.3}M")
+    print(f"Model size: {params*4/(1024*1024):.2f} MB")
     train()

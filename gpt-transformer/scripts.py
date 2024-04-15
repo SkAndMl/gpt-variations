@@ -7,13 +7,6 @@ from typing import Tuple
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-class Tokens:
-    pad_token = 0
-    sos_token = 1
-    eos_token = 2
-    unk_token = 3
-    sep_token = 4
-
 
 class Embedding(nn.Module):
 
@@ -23,7 +16,7 @@ class Embedding(nn.Module):
 
         self.vocab_size = config["vocab_size"]
         self.d_model = config["d_model"]
-        self.seq_len = config["seq_len"]
+        self.context_length = config["context_length"]
         self.device = config["device"]
 
         self.token_embedding = nn.Embedding(num_embeddings=self.vocab_size, embedding_dim=self.d_model)
@@ -34,42 +27,14 @@ class Embedding(nn.Module):
 
         B, T = x.shape
 
-        assert T<=self.seq_len, AssertionError(f"Sequence length {T} should be less than or equal to {self.seq_len}")
+        assert T<=self.context_length, AssertionError(f"Sequence length {T} should be less than or equal to {self.context_length}")
 
         position = torch.arange(start=0, end=T, dtype=torch.int).unsqueeze(dim=0).to(self.device) # 1, T
         tok_emb = self.token_embedding(x) # B, T, D_MODEL
         pos_emb = self.pos_embedding(position) # 1, T, D_MODEL
-
         return self.dropout(tok_emb + pos_emb)
 
-class PosEmbedding(nn.Module):
-
-    def __init__(self, config):
-
-        super().__init__()
-
-        self.vocab_size = config["vocab_size"]
-        self.d_model = config["d_model"]
-        self.seq_len = config["seq_len"]
-        self.device = config["device"]
-
-        self.token_embedding = nn.Embedding(num_embeddings=self.vocab_size, embedding_dim=self.d_model)
-        self.pos_embedding = nn.Embedding(num_embeddings=self.seq_len, embedding_dim=self.d_model)
-        self.dropout = nn.Dropout(p=config["dropout"])
     
-    def forward(self, x:torch.Tensor) -> Tuple[torch.Tensor]:
-
-        B, T = x.shape
-
-        assert T<=self.seq_len, AssertionError(f"Sequence length {T} should be less than or equal to {self.seq_len}")
-
-        position = torch.arange(start=0, end=T, dtype=torch.int).unsqueeze(dim=0).to(self.device) # 1, T
-        tok_emb = self.token_embedding(x) # B, T, D_MODEL
-        pos_emb = self.pos_embedding(position) # 1, T, D_MODEL
-
-        return self.dropout(tok_emb + pos_emb), pos_emb
-    
-
 class MHA(nn.Module):
 
     def __init__(self, config) -> None:
@@ -86,8 +51,7 @@ class MHA(nn.Module):
         self.o_proj = nn.Linear(in_features=self.d_model, out_features=self.d_model)
         self.dropout = nn.Dropout(p=self.dropout_p)
 
-
-        mask = torch.ones(size=(1, 1, config["seq_len"], config["seq_len"]), dtype=torch.bool).tril(diagonal=0)
+        mask = torch.ones(size=(1, 1, config["context_length"], config["context_length"]), dtype=torch.bool).tril(diagonal=0)
         self.register_buffer(name="mask", tensor=mask)
 
 
@@ -132,22 +96,23 @@ class DecoderBlock(nn.Module):
     def __init__(self, config) -> None:
 
         super().__init__()
-        self.layer_norm = nn.LayerNorm(normalized_shape=config["d_model"])
+        self.layer_norm_1 = nn.LayerNorm(normalized_shape=config["d_model"])
+        self.layer_norm_2 = nn.LayerNorm(normalized_shape=config["d_model"])
         self.masked_mha = MHA(config)
         self.ffn = FFN(config)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         
-        masked_out = self.layer_norm(x + self.masked_mha(x))
-        ffn_out = self.layer_norm(masked_out + self.ffn(masked_out))
+        masked_out = self.layer_norm_1(x + self.masked_mha(x))
+        ffn_out = self.layer_norm_2(masked_out + self.ffn(masked_out))
         return ffn_out
+
 
 class Decoder(nn.Module):
 
     def __init__(self, config) -> None:
 
         super().__init__()
-
         self.blocks = nn.ModuleList([DecoderBlock(config) for _ in range(config["n_layers"])])
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -177,21 +142,6 @@ class ConvDecoder(nn.Module):
 
         for block in self.blocks:
             x = block(x)
-        
-        return x
-
-
-class PosDecoder(nn.Module):
-
-    def __init__(self, config) -> None:
-
-        super().__init__()
-        self.blocks = nn.ModuleList([DecoderBlock(config) for _ in range(config["n_layers"])])
-    
-    def forward(self, x: torch.Tensor, pos_embeddings: torch.Tensor) -> torch.Tensor:
-
-        for block in self.blocks:
-            x = block(x) + pos_embeddings
         
         return x
 
