@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from tokenizers import Tokenizer
 from typing import Optional, Tuple, Dict, Union
 from scripts import Embedding, Decoder
 from scripts import ConvDecoder
@@ -95,7 +94,7 @@ class ParallelGPT(nn.Module):
 ## TODO: add generate function to parallelformer
     
 
-class ConvGPT(nn.Module):
+class LCGPT(nn.Module):
 
     def __init__(self, config: Dict[str, Union[str, int]]) -> None:
 

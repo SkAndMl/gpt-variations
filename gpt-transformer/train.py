@@ -6,11 +6,11 @@ from contextlib import nullcontext
 from torch.utils.tensorboard.writer import SummaryWriter
 import os
 
-from model import VanillaGPT, ParallelGPT, ConvGPT
+from model import VanillaGPT, ParallelGPT, LCGPT
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 ctx = autocast(enabled=True, dtype=torch.float16) if device=="cuda" else nullcontext()
-model_name = "vanillagpt" # "parallelgpt", "convgpt"
+model_name = "vanillagpt" # "parallelgpt", "lcgpt"
 
 with open("config.json", "r") as f:
     config = json.load(f)
@@ -40,7 +40,7 @@ val_data = data[train_len:]
 if model_name.startswith("parallel"):
     gpt = ParallelGPT(config=config)
 elif model_name.startswith("conv"):
-    gpt = ConvGPT(config=config)
+    gpt = LCGPT(config=config)
 else:
     gpt = VanillaGPT(config=config)
 
