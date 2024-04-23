@@ -10,7 +10,7 @@ from model import VanillaGPT, ParallelGPT, LCGPT, CCGPT
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 ctx = autocast(enabled=True, dtype=torch.float16) if device=="cuda" else nullcontext()
-model_name = "vanillagpt" # "parallelgpt", "lcgpt", "ccgpt"
+model_name = "parallelgpt_1" # "vanillagpt", "parallelgpt", "lcgpt", "ccgpt", "parallelgpt_1"
 
 with open("config.json", "r") as f:
     config = json.load(f)
@@ -80,6 +80,9 @@ def eval_model() -> Dict[str, float]:
             x_batch, y_batch = get_random_batch(split)
             
             with ctx:
+              if '1' in model_name:
+                _, l_ = gpt(x_batch, True, y_batch)
+              else:
                 _, l_ = gpt(x_batch, y_batch)
             
             loss += l_.item()
@@ -107,6 +110,9 @@ def train():
         x_batch, y_batch = get_random_batch()
     
         with ctx:
+          if '1' in model_name:
+            _, loss = gpt(x_batch, False, y_batch)
+          else:
             _, loss = gpt(x_batch, y_batch)
 
         scaler.scale(loss).backward()  

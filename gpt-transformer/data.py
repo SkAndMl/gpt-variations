@@ -7,7 +7,7 @@ split_sizes = {
 }
 
 for split in split_sizes:
-    dataset = load_dataset(f"transformersbook/codeparrot-{split}", split="validation" if split=="valid" else split, streaming=True)
+    dataset = load_dataset(f"huggingface-course/codeparrot-ds-{split}", split="validation" if split=="valid" else split, streaming=True)
     split_rows = list(islice(dataset, split_sizes[split]))
 
     with open(f"{split}.txt", "w") as f:

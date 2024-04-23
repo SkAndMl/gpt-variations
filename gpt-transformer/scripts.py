@@ -3,82 +3,41 @@ from torch import nn
 import torch.nn.functional as F
 import math
 import logging
+from typing import Tuple
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class Embedding(nn.Module):
-    """
-    Embedding module for the tokens
-    """
 
     def __init__(self, config):
-        """
-        Initializes the Embedding module.
 
-        Args:
-            config (dict): Configuration dictionary containing `vocab_size`, `d_model`, 
-                           `context_length`, `dropout`, and `device`.
-        """
         super().__init__()
 
-        # Initialize module parameters from the configuration dictionary
         self.vocab_size = config["vocab_size"]
         self.d_model = config["d_model"]
         self.context_length = config["context_length"]
         self.device = config["device"]
 
-        # Embedding layers
         self.token_embedding = nn.Embedding(num_embeddings=self.vocab_size, embedding_dim=self.d_model)
         self.pos_embedding = nn.Embedding(num_embeddings=self.context_length, embedding_dim=self.d_model)
-
-        # Dropout layer
         self.dropout = nn.Dropout(p=config["dropout"])
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Defines the forward pass of the module.
+    def forward(self, x:torch.Tensor) -> torch.Tensor:
 
-        Args:
-            x (torch.Tensor): The input tensor containing token indices. Shape [B, T] where
-                              B is batch size and T is sequence length.
+        B, T = x.shape
 
-        Returns:
-            torch.Tensor: The resulting tensor after applying embeddings and dropout. Shape [B, T, D_MODEL].
+        assert T<=self.context_length, AssertionError(f"Sequence length {T} should be less than or equal to {self.context_length}")
 
-        Raises:
-            AssertionError: If the sequence length of the input exceeds `context_length`.
-        """
-        B, T = x.shape  # Batch size (B) and sequence length (T)
-
-        # Ensure the sequence length does not exceed the maximum allowed length
-        assert T <= self.context_length, AssertionError(f"Sequence length {T} should be less than or equal to {self.context_length}")
-
-        # Create a tensor of positions [0, 1, ..., T-1], and expand to match batch size
-        position = torch.arange(start=0, end=T, dtype=torch.int64).unsqueeze(dim=0).to(self.device)
-
-        # Compute token and position embeddings
-        tok_emb = self.token_embedding(x)         # Token embeddings [B, T, D_MODEL]
-        pos_emb = self.pos_embedding(position)    # Position embeddings [1, T, D_MODEL]
-
-        # Sum token and position embeddings and apply dropout
+        position = torch.arange(start=0, end=T, dtype=torch.int).unsqueeze(dim=0).to(self.device) # 1, T
+        tok_emb = self.token_embedding(x) # B, T, D_MODEL
+        pos_emb = self.pos_embedding(position) # 1, T, D_MODEL
         return self.dropout(tok_emb + pos_emb)
 
     
 class MHA(nn.Module):
 
-    """
-    Masked Multi-Head Attention Block for the decoder
-    """
-
     def __init__(self, config) -> None:
-        
-        """
-        Initializes the MHA block
-        Args:
-            config (dict)
-        """
-
         super().__init__()
 
         assert config["d_model"]%config["n_heads"]==0, AssertionError(f"d_model: {config['d_model']} should be divisible by n_heads: {config['n_heads']}")
@@ -91,29 +50,21 @@ class MHA(nn.Module):
         self.proj = nn.Linear(in_features=self.d_model, out_features=self.d_model*3)
         self.o_proj = nn.Linear(in_features=self.d_model, out_features=self.d_model)
         self.dropout = nn.Dropout(p=self.dropout_p)
-        # create and register the causal mask
+
         mask = torch.ones(size=(1, 1, config["context_length"], config["context_length"]), dtype=torch.bool).tril(diagonal=0)
         self.register_buffer(name="mask", tensor=mask)
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
-        """
-        Defines the forward pass of the MHA bloc
-        Args:
-            x (torch.Tensor)
-        """
-
         B, T, D_MODEL = x.shape
-        # get query, key, value from the projection of x from D_MODEL to D_MODEL*3
         q, k, v = self.proj(x).split(D_MODEL, dim=2) # B, T, D_MODEL
-        # reshape q,k,v for calculating self-attention
         q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2) 
         k = k.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
         
         attn_outputs: torch.Tensor = (q @ k.transpose(-2, -1))*(1/math.sqrt(k.size(-1)))
-        attn_outputs = attn_outputs.masked_fill(self.mask[:, :, :T, :T]==0, value=float("-inf")) # fill in the mask
+        attn_outputs = attn_outputs.masked_fill(self.mask[:, :, :T, :T]==0, value=float("-inf"))
         attn_outputs = F.softmax(attn_outputs, dim=-1)
         attn_outputs = self.dropout(attn_outputs) @ v
         
@@ -123,17 +74,7 @@ class MHA(nn.Module):
 
 class FFN(nn.Module):
 
-    """
-    Fully connected feed forward block :- sub-block the decoder block
-    """
-
     def __init__(self, config):
-
-        """
-        Initializes the feed forward block
-        Args:
-            config (dict)
-        """
 
         super().__init__()
 

@@ -76,13 +76,24 @@ class ParallelGPT(nn.Module):
         self.device = config["device"]
 
     
-    def forward(self, x: torch.Tensor, y: Optional[torch.Tensor]=None) -> Tuple[torch.Tensor]:
+    def forward(self, x: torch.Tensor, drop_1: bool=False, y: Optional[torch.Tensor]=None) -> Tuple[torch.Tensor]:
 
         x = self.input_embedding(x)
         x1, x2 = x.split(split_size=self.d_model, dim=-1)
-        decoder_1_out = self.decoder_1(x1)
-        decoder_2_out = self.decoder_2(x2)
-        logits: torch.Tensor = self.cls_net(self.weight*decoder_1_out + (1-self.weight)*decoder_2_out) # B, K, OUTPUT_VOCAB_SIZE
+        
+        
+
+        if drop_1:
+          if self.weight.item()>=0.5:
+            decoder_1_out = self.decoder_1(x1)
+            logits: torch.Tensor = self.cls_net(self.weight*decoder_1_out)
+          else:
+            decoder_2_out = self.decoder_2(x2)
+            logits: torch.Tensor = self.cls_net((1-self.weight)*decoder_2_out)
+        else:
+          decoder_1_out = self.decoder_1(x1)
+          decoder_2_out = self.decoder_2(x2)
+          logits: torch.Tensor = self.cls_net(self.weight*decoder_1_out + (1-self.weight)*decoder_2_out) # B, K, OUTPUT_VOCAB_SIZE
 
         B, SEQ_LEN, _ = logits.shape
         loss = None
