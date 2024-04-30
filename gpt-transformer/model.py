@@ -36,14 +36,14 @@ class VanillaGPT(nn.Module):
         return logits, loss
     
     @torch.inference_mode()
-    def translate(self, x: torch.Tensor=None, max_len: int=20) -> torch.Tensor:
+    def generate(self, x: torch.Tensor=None, max_new_tokens: int=20) -> torch.Tensor:
 
         if x is None:
             x = torch.randint(low=0, high=self.vocab_size-1).resize((1, 1))
         
         x = x.to(self.device)
         
-        while x.shape[-1] < max_len:
+        while x.shape[-1] < max_new_tokens:
             logits, _ = self(x[:, -self.context_length:])
             max_token_id = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True).to(self.device)
             x = torch.cat([x, max_token_id], dim=-1)
