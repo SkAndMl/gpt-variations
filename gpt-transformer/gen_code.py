@@ -2,7 +2,7 @@ import torch
 import json
 import time
 import argparse
-from model import VanillaGPT
+from model import GPT
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 with open("gpt-transformer/config.json") as f:
@@ -20,7 +20,7 @@ with open("gpt-transformer/train.txt", "r", encoding="utf-8") as train, open("gp
 decode = lambda l: "".join([itos[i] for i in l]) 
 encode = lambda s: [stoi[ch] for ch in s]
 
-gpt = VanillaGPT(config=config)
+gpt = GPT(config=config)
 gpt.load_state_dict(torch.load("checkpoints/vanillagpt.pt",
                                 map_location=torch.device(device=device)))
 

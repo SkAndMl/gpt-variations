@@ -5,8 +5,7 @@ from torch.cuda.amp import GradScaler, autocast
 from contextlib import nullcontext
 from torch.utils.tensorboard.writer import SummaryWriter
 import os
-
-from model import VanillaGPT, ParallelGPT, LCGPT, CCGPT
+from model import GPT, ParallelGPT, LinearlyCompressedGPT, ConvCompressedGPT
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 ctx = autocast(enabled=True, dtype=torch.float16) if device=="cuda" else nullcontext()
@@ -40,11 +39,11 @@ val_data = data[train_len:]
 if model_name.startswith("parallel"):
     gpt = ParallelGPT(config=config)
 elif model_name.startswith("lc"):
-    gpt = LCGPT(config=config)
+    gpt = LinearlyCompressedGPT(config=config)
 elif model_name.startswith("cc"):
-    gpt = CCGPT(config=config)
+    gpt = ConvCompressedGPT(config=config)
 else:
-    gpt = VanillaGPT(config=config)
+    gpt = GPT(config=config)
 
 gpt = gpt.to(device)
 optimizer = torch.optim.AdamW(params=gpt.parameters(),

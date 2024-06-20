@@ -103,8 +103,8 @@ class DecoderBlock(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         
-        masked_out = self.layer_norm_1(x + self.masked_mha(x))
-        ffn_out = self.layer_norm_2(masked_out + self.ffn(masked_out))
+        masked_out = x + self.masked_mha(self.layer_norm_1(x))
+        ffn_out = masked_out + self.ffn(self.layer_norm_2(masked_out))
         return ffn_out
 
 
@@ -123,7 +123,7 @@ class Decoder(nn.Module):
         return x
     
 
-class LCDecoder(nn.Module):
+class LinearlyCompressedDecoder(nn.Module):
 
     def __init__(self, config) -> None:
 
@@ -146,7 +146,7 @@ class LCDecoder(nn.Module):
         return x
     
 
-class ConvCompressLayer(nn.Module):
+class ConvCompressedLayer(nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int, kernel_size: int=1) -> None:
 
@@ -164,7 +164,7 @@ class ConvCompressLayer(nn.Module):
         return x
     
 
-class CCDecoder(nn.Module):
+class ConvCompressedDecoder(nn.Module):
 
     def __init__(self, config) -> None:
 
@@ -175,7 +175,7 @@ class CCDecoder(nn.Module):
             self.blocks.extend([
                 DecoderBlock(config),
                 DecoderBlock(config),
-                ConvCompressLayer(config["d_model"], config["d_model"]//2)
+                ConvCompressedLayer(config["d_model"], config["d_model"]//2)
             ])
             config["d_model"] //= 2
             
