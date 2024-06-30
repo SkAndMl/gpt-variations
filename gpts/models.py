@@ -2,9 +2,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import math
-import logging
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class CausalSelfAttention(nn.Module):
@@ -20,20 +17,20 @@ class CausalSelfAttention(nn.Module):
         self.drop_layer = nn.Dropout(p=config['attn_dropout'])
         
         ctx_length = config['ctx_length']
-        mask = torch.tril(input=torch.ones((ctx_length, ctx_length), requires_grad=False)).view(1, 1, -1, -1)
+        mask = torch.tril(input=torch.ones((ctx_length, ctx_length), requires_grad=False)).unsqueeze(0).unsqueeze(1)
         self.register_buffer('mask', mask, persistent=True)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         
         b, t, d_model = x.shape
-        q, k, v = self.qkv_proj(x).split(d_model, 3) # b, t, d_model
+        q, k, v = self.qkv_proj(x).split(d_model, 2) # b, t, d_model
         q = q.reshape(b, t, self.n_heads, self.head_dim).transpose(1, 2) # b, n_heads, t, head_dim
         k = k.reshape(b, t, self.n_heads, self.head_dim).transpose(1, 2)
         v = v.reshape(b, t, self.n_heads, self.head_dim).transpose(1, 2)
 
         attn_wts = (q @ k.transpose(-1, -2)) / math.sqrt(d_model) # b, n_heads, t, t
         attn_wts = attn_wts.masked_fill(self.mask[:, :, :t, :t]==0, value=float("-inf"))
-        attn_wts = F.softmax(self.drop_layer(attn_wts))
+        attn_wts = F.softmax(self.drop_layer(attn_wts), dim=-1)
         y = attn_wts @ v # b, n_heads, t, head_dim
         y = y.transpose(1, 2).contiguous().view(b, t, -1)
         return self.o_proj(y)
@@ -62,7 +59,7 @@ class DecoderBlock(nn.Module):
         super().__init__()
         self.mha = CausalSelfAttention(config)
         self.ln_1 = nn.LayerNorm(config['d_model'])
-        self.mlp = MLP(config['d_model'])
+        self.mlp = MLP(config)
         self.ln_2 = nn.LayerNorm(config['d_model'])
     
     def forward(self, x: torch.Tensor):
@@ -84,13 +81,13 @@ class GPT(nn.Module):
         ))
 
         # tie the weights to reduce params
-        self.decoder.wte.weight = self.decoder.lm_heads.weight
+        self.decoder.wte.weight = self.decoder.lm_head.weight
         self.apply(self._init_weights)
 
     def forward(self, x, y=None):
         b, t = x.shape
         tok_emb = self.decoder.wte(x) # b, t, d_model
-        pos_emb = self.decoder.wpe(torch.arange(0, t).unsqueeze(1)) # 1, t, d_model
+        pos_emb = self.decoder.wpe(torch.arange(0, t, device=x.device).unsqueeze(0)) # 1, t, d_model
         x = tok_emb + pos_emb
         for block in self.decoder.blocks:
             x = block(x)
@@ -135,7 +132,7 @@ class pGPT(nn.Module):
     def forward(self, x, y=None):
         b, t = x.shape
         tok_emb1, tok_emb2 = self.decoder.wte(x).split(self.d_model, 2)
-        pos_emb1, pos_emb2 = self.decoder.wpe(x).split(self.d_model, 2)
+        pos_emb1, pos_emb2 = self.decoder.wpe(torch.arange(0, t, device=x.device).unsqueeze(0)).split(self.d_model, 2)
         x1, x2 = tok_emb1 + pos_emb1, tok_emb2 + pos_emb2
 
         for block1, block2 in zip(self.decoder.path_1, self.decoder.path_2):
@@ -206,7 +203,7 @@ class ccGPT(nn.Module):
 
         b, t = x.shape
         tok_emb = self.decoder.wte(x)
-        pos_emb = self.decoder.wpe(x)
+        pos_emb = self.decoder.wpe(torch.arange(0, t, device=x.device).unsqueeze(0))
         x = tok_emb + pos_emb
         for block in self.decoder.blocks:
             x = block(x)
@@ -258,7 +255,7 @@ class lcGPT(nn.Module):
 
         b, t = x.shape
         tok_emb = self.decoder.wte(x)
-        pos_emb = self.decoder.wpe(x)
+        pos_emb = self.decoder.wpe(torch.arange(0, t, device=x.device).unsqueeze(0))
         x = tok_emb + pos_emb
         for block in self.decoder.blocks:
             x = block(x)
