@@ -1,0 +1,9 @@
+{
+    "n_decoders" : 12,
+    "d_model" : 1024,
+    "n_heads" : 12,
+    "attn_dropout" : 0.01,
+    "mlp_dropout": 0.01,
+    "ctx_length": 1024,
+    "model_type": "gpt"
+}

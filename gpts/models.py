@@ -1,7 +1,12 @@
+"""
+gpt-variations' model architecture code
+adapted from karpathy's nanogpt
+June 30, 2024
+"""
+
 import torch
 from torch import nn
 import torch.nn.functional as F
-import math
 
 
 class CausalSelfAttention(nn.Module):
@@ -10,29 +15,20 @@ class CausalSelfAttention(nn.Module):
 
         super().__init__()
         d_model = config['d_model']
-        self.head_dim = config['head_dim']
         self.n_heads = config['n_heads']
         self.qkv_proj = nn.Linear(d_model, d_model*3)
         self.o_proj = nn.Linear(d_model, d_model)
-        self.drop_layer = nn.Dropout(p=config['attn_dropout'])
-        
-        ctx_length = config['ctx_length']
-        mask = torch.tril(input=torch.ones((ctx_length, ctx_length), requires_grad=False)).unsqueeze(0).unsqueeze(1)
-        self.register_buffer('mask', mask, persistent=True)
-    
+        self.attn_dropout = config['attn_dropout']        
+      
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         
         b, t, d_model = x.shape
-        q, k, v = self.qkv_proj(x).split(d_model, 2) # b, t, d_model
-        q = q.reshape(b, t, self.n_heads, self.head_dim).transpose(1, 2) # b, n_heads, t, head_dim
-        k = k.reshape(b, t, self.n_heads, self.head_dim).transpose(1, 2)
-        v = v.reshape(b, t, self.n_heads, self.head_dim).transpose(1, 2)
-
-        attn_wts = (q @ k.transpose(-1, -2)) / math.sqrt(d_model) # b, n_heads, t, t
-        attn_wts = attn_wts.masked_fill(self.mask[:, :, :t, :t]==0, value=float("-inf"))
-        attn_wts = F.softmax(self.drop_layer(attn_wts), dim=-1)
-        y = attn_wts @ v # b, n_heads, t, head_dim
-        y = y.transpose(1, 2).contiguous().view(b, t, -1)
+        q, k, v = self.qkv_proj(x).split(d_model, dim=2) # b, t, d_model
+        q = q.view(b, t, self.n_heads, d_model//self.n_heads).transpose(1, 2) # b, n_heads, t, head_dim
+        k = k.view(b, t, self.n_heads, d_model//self.n_heads).transpose(1, 2)
+        v = v.view(b, t, self.n_heads, d_model//self.n_heads).transpose(1, 2)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=self.attn_dropout)
+        y = y.transpose(1, 2).contiguous().view(b, t, d_model)
         return self.o_proj(y)
 
 
@@ -102,14 +98,11 @@ class GPT(nn.Module):
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight)
+            torch.nn.init.normal_(m.weight, mean=0.0, std=0.02)
             if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
+                torch.nn.init.zeros_(m.bias)
         elif isinstance(m, nn.Embedding):
-            nn.init.uniform_(m.weight, -1/math.sqrt(m.embedding_dim), 1/math.sqrt(m.embedding_dim))
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.weight, 1)
-            nn.init.constant_(m.bias, 0)
+            torch.nn.init.normal_(m.weight, mean=0.0, std=0.02)
 
 
 class pGPT(nn.Module):
@@ -151,14 +144,11 @@ class pGPT(nn.Module):
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight)
+            torch.nn.init.normal_(m.weight, mean=0.0, std=0.02)
             if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
+                torch.nn.init.zeros_(m.bias)
         elif isinstance(m, nn.Embedding):
-            nn.init.uniform_(m.weight, -1/math.sqrt(m.embedding_dim), 1/math.sqrt(m.embedding_dim))
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.weight, 1)
-            nn.init.constant_(m.bias, 0)
+            torch.nn.init.normal_(m.weight, mean=0.0, std=0.02)
 
 
 class ConvDecoderBlock(nn.Module):
@@ -218,14 +208,11 @@ class ccGPT(nn.Module):
     
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight)
+            torch.nn.init.normal_(m.weight, mean=0.0, std=0.02)
             if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
+                torch.nn.init.zeros_(m.bias)
         elif isinstance(m, nn.Embedding):
-            nn.init.uniform_(m.weight, -1/math.sqrt(m.embedding_dim), 1/math.sqrt(m.embedding_dim))
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.weight, 1)
-            nn.init.constant_(m.bias, 0)
+            torch.nn.init.normal_(m.weight, mean=0.0, std=0.02)
 
 
 class lcGPT(nn.Module):
@@ -271,11 +258,8 @@ class lcGPT(nn.Module):
    
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight)
+            torch.nn.init.normal_(m.weight, mean=0.0, std=0.02)
             if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
+                torch.nn.init.zeros_(m.bias)
         elif isinstance(m, nn.Embedding):
-            nn.init.uniform_(m.weight, -1/math.sqrt(m.embedding_dim), 1/math.sqrt(m.embedding_dim))
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.weight, 1)
-            nn.init.constant_(m.bias, 0)
+            torch.nn.init.normal_(m.weight, mean=0.0, std=0.02)

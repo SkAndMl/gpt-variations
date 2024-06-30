@@ -1,34 +1,35 @@
+"""
+script for training, checkpointing, inferencing, etc
+June 30, 2024
+"""
+
 import matplotlib.pyplot as plt
 import torch
 import time
 import pandas as pd
 from torch.optim import AdamW
-from torch.utils.data import DataLoader
-import numpy as np
 from gpts.data import TextDataset
 from gpts.models import GPT, pGPT, ccGPT, lcGPT
 
 class Trainer:
 
-    def __init__(self,
-                 model_config,
-                 model="gpt",
-                 lr=3e-4,
-                 bs=32,
-                 epochs=10,
-                 device="cpu"):
+    def __init__(self, model_config, train_config):
         
+        self.train_config = train_config
         self.model_config = model_config
-        self.device = device
-        self._init_model(model)
+        self.device = train_config["device"]
+        self._init_model(model_config['model_type'])
         self.optimizer = AdamW(params=self.model.parameters(),
-                                lr=lr)
-        self._init_data(bs)
-        self.epochs = epochs
-        self.metrics = pd.DataFrame(columns=["epochs", "train_loss", "test_loss", "epoch_time"])
+                                lr=train_config['lr'])
+        self.train_ds = TextDataset(train=True)
+        self.test_ds = TextDataset(train=False)
+        self.train_iters = train_config['train_iters']
+        self.eval_step = train_config['eval_step']
+        self.eval_iters = train_config['eval_iters']
+        self.accum_steps = train_config['gradient_accumulation_steps']
+        self.metrics = pd.DataFrame(columns=["iter", "train_loss", "eval_loss", "time"])
         
 
-    
     def _init_model(self, model):
 
         if model == "gpt":
@@ -40,80 +41,82 @@ class Trainer:
         else:
             self.model = lcGPT(self.model_config)
         
+        params = sum(torch.numel(p) for p in self.model.parameters() if p.requires_grad)
+        print(f"Model params: {params/10e6:.3f}")
+        
         self.model = self.model.to(self.device)
-        
-    
-    def _init_data(self, bs):
-        train_ds = TextDataset(train=True)
-        test_ds = TextDataset(train=False)
-        self.train_dl = DataLoader(dataset=train_ds,
-                                   batch_size=bs, 
-                                   shuffle=True)
-        self.test_dl = DataLoader(dataset=test_ds,
-                                  batch_size=bs,
-                                  shuffle=False)
 
-
-    def _train(self):
-        self.model.train()
-        tot_loss = 0
-        for x, y in self.train_dl:
-            x, y = x.to(self.device), y.to(self.device)
-            _, loss = self.model(x, y)
-            tot_loss += loss.item()
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-        
-        return tot_loss/len(self.train_dl)
-
-
-    @torch.inference_mode()
-    def _eval(self):
-        self.model.eval()
-        tot_loss = 0
-        for x, y in self.test_dl:
-            x, y = x.to(self.device), y.to(self.device)
-            _, loss = self.model(x, y)
-            tot_loss += loss.item()
-        
-        return tot_loss/len(self.test_dl)
  
-    
+    def _get_batch(self, train=True):
+        
+        if train:
+            idxs = torch.randint(0, len(self.train_ds), size=(self.train_config['bs'],)).numpy()
+            return self.train_ds[idxs]
+        else:
+            idxs = torch.randint(0, len(self.test_ds), size=(self.train_config['bs'],)).numpy()
+            return self.test_ds[idxs]
+
+
     def fit(self):
 
-        for epoch in range(1, self.epochs+1):
+        running_loss = 0
+        a = time.time()
+        for itr in range(1, self.train_iters+1):
 
-            a = time.time()
-            train_loss, test_loss = self._train(), self._eval()
-            b = time.time()
+            self.optimizer.zero_grad()
+            
+            x, y = self._get_batch(True)
+            x, y = x.to(self.device), y.to(self.device)
+            with torch.autocast(device_type=self.device, dtype=torch.float16):
+                _, loss = self.model(x, y)
 
-            new_row = pd.DataFrame(data = {
-                "epochs": [epoch],
-                "train_loss": [train_loss],
-                "test_loss": [test_loss],
-                "epoch_time": [round(b-a, 3)]
-            })
-            self.metrics = pd.concat([self.metrics, new_row], axis=0, ignore_index=True)
+            running_loss += loss.item()
+            loss /= self.accum_steps
+            loss.backward()
+            
+            if itr%self.accum_steps==0:
+                self.optimizer.step()
 
-            print(self.metrics.to_string(index=False))
-        
-        return self.metrics
-    
+            if itr%self.eval_step==0:
+                self.model.eval()
+                eval_loss = 0
+                with torch.inference_mode():
+                    for _ in range(self.eval_iters):
+                        x, y = self._get_batch(False)
+                        x, y = x.to(self.device), y.to(self.device)
+                        with torch.autocast(device_type=self.device, dtype=torch.float16):
+                            _, loss = self.model(x, y) 
+                        eval_loss += loss.item()
+                
+                b = time.time()
+                new_row = pd.DataFrame(data={
+                    "iter": [itr],
+                    "train_loss": [running_loss/self.eval_step],
+                    "eval_loss": [eval_loss/self.eval_iters],
+                    "time": [round(b-a, 3)]
+                })
+                running_loss = 0
+                self.metrics = pd.concat([self.metrics, new_row], axis=0, ignore_index=True)
+                print(self.metrics.to_string(index=False))
+                a = time.time()
+            
+            self.model.train()
+                    
+
     def save(self, file_path):
         
         checkpoint = {
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
-            "model_config": self.model_config
+            "model_config": self.model_config,
+            "train_config": self.train_config
         }
-
         torch.save(checkpoint, file_path)
 
     def plot_metrics(self):
         plt.figure(figsize=(12, 6))
-        plt.plot(self.metrics['epoch'], self.metrics['train_loss'], label='Train Loss')
-        plt.plot(self.metrics['epoch'], self.metrics['test_loss'], label='Test Loss')
+        plt.plot(self.metrics['iter'], self.metrics['train_loss'], label='Train Loss')
+        plt.plot(self.metrics['iter'], self.metrics['test_loss'], label='Test Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
         plt.title('Training and Test Loss Over Epochs')

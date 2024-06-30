@@ -1,0 +1,9 @@
+{
+    "lr": 3e-4,
+    "bs": 16,
+    "gradient_accumulation_steps": 2,
+    "wd": 1e-4,
+    "train_iters": 10,
+    "eval_step": 2,
+    "eval_iters": 5
+}
