@@ -18,9 +18,7 @@ class Trainer:
         self.train_config = train_config
         self.model_config = model_config
         self.device = train_config["device"]
-        self._init_model(model_config['model_type'])
-        self.optimizer = AdamW(params=self.model.parameters(),
-                                lr=train_config['lr'])
+        self._init_model(model_config['model_type']) # setup the model and the optimizer
         self.train_ds = TextDataset(train=True)
         self.test_ds = TextDataset(train=False)
         self.train_iters = train_config['train_iters']
@@ -45,11 +43,14 @@ class Trainer:
         print(f"Model params: {params/10e6:.3f}")
         
         self.model = self.model.to(self.device)
+        self.optimizer = AdamW(params=self.model.parameters(),
+                               lr=self.train_config['lr'])
 
  
     def _get_batch(self, train=True):
-        
+
         if train:
+            # get 'batch size' random indices
             idxs = torch.randint(0, len(self.train_ds), size=(self.train_config['bs'],)).numpy()
             return self.train_ds[idxs]
         else:
@@ -61,21 +62,22 @@ class Trainer:
 
         running_loss = 0
         a = time.time()
+        self.optimizer.zero_grad()
         for itr in range(1, self.train_iters+1):
-
-            self.optimizer.zero_grad()
+            # run gradient accumulation to simulate larger batch size
+            for _ in range(self.accum_steps):
+                x, y = self._get_batch(True)
+                x, y = x.to(self.device), y.to(self.device)
+                # cast to float16 to save up cuda memory
+                with torch.autocast(device_type=self.device, dtype=torch.float16):
+                    _, loss = self.model(x, y)
+                
+                running_loss += loss.item()
+                loss /= self.accum_steps # normalize it for updating the weights
+                loss.backward()
             
-            x, y = self._get_batch(True)
-            x, y = x.to(self.device), y.to(self.device)
-            with torch.autocast(device_type=self.device, dtype=torch.float16):
-                _, loss = self.model(x, y)
-
-            running_loss += loss.item()
-            loss /= self.accum_steps
-            loss.backward()
-            
-            if itr%self.accum_steps==0:
-                self.optimizer.step()
+            self.optimizer.step()
+            self.optimizer.zero_grad(set_to_none=True)
 
             if itr%self.eval_step==0:
                 self.model.eval()
@@ -91,11 +93,11 @@ class Trainer:
                 b = time.time()
                 new_row = pd.DataFrame(data={
                     "iter": [itr],
-                    "train_loss": [running_loss/self.eval_step],
+                    "train_loss": [running_loss/(self.eval_step*self.accum_steps)],
                     "eval_loss": [eval_loss/self.eval_iters],
                     "time": [round(b-a, 3)]
                 })
-                running_loss = 0
+                running_loss = 0 # reset train loss
                 self.metrics = pd.concat([self.metrics, new_row], axis=0, ignore_index=True)
                 print(self.metrics.to_string(index=False))
                 a = time.time()
