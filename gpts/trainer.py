@@ -6,6 +6,7 @@ June 30, 2024
 import matplotlib.pyplot as plt
 import torch
 import time
+import math
 import pandas as pd
 from torch.optim import AdamW
 from gpts.data import TextDataset
@@ -18,14 +19,19 @@ class Trainer:
         self.train_config = train_config
         self.model_config = model_config
         self.device = train_config["device"]
-        self._init_model(model_config['model_type']) # setup the model and the optimizer
+        self._init_model(model_config['model_type'])
         self.train_ds = TextDataset(train=True)
         self.test_ds = TextDataset(train=False)
         self.train_iters = train_config['train_iters']
         self.eval_step = train_config['eval_step']
         self.eval_iters = train_config['eval_iters']
         self.accum_steps = train_config['gradient_accumulation_steps']
-        self.metrics = pd.DataFrame(columns=["iter", "train_loss", "eval_loss", "time"])
+        self.metrics = pd.DataFrame(columns=["iter", "train_loss", "eval_loss", "lr", "time"])
+        
+        ## setup lr schedule params
+        self.max_lr = train_config['max_lr']
+        self.min_lr = train_config['min_lr']
+        self.warmup_steps = train_config['warmup_steps']
         
 
     def _init_model(self, model):
@@ -40,44 +46,58 @@ class Trainer:
             self.model = lcGPT(self.model_config)
         
         params = sum(torch.numel(p) for p in self.model.parameters() if p.requires_grad)
-        print(f"Model params: {params/10e6:.3f}")
+        print(f"Model params: {params/1e6:.3f}")
         
         self.model = self.model.to(self.device)
         self.optimizer = AdamW(params=self.model.parameters(),
-                               lr=self.train_config['lr'])
+                               lr=self.train_config['min_lr'])
 
  
     def _get_batch(self, train=True):
-
+        
         if train:
-            # get 'batch size' random indices
             idxs = torch.randint(0, len(self.train_ds), size=(self.train_config['bs'],)).numpy()
             return self.train_ds[idxs]
         else:
             idxs = torch.randint(0, len(self.test_ds), size=(self.train_config['bs'],)).numpy()
             return self.test_ds[idxs]
-
+        
+        
+    def _get_lr(self, itr):
+        # warmup the lr
+        if itr<self.warmup_steps:
+            return self.max_lr*itr/self.warmup_steps
+        # return min_lr if training is continued after predefined iters
+        if itr>self.train_iters:
+            return self.min_lr
+        
+        ## cosine decay
+        decay_ratio = (itr-self.warmup_steps)/(self.train_iters-self.warmup_steps)
+        lr = self.min_lr + 0.5*(self.max_lr-self.min_lr)*(1.0 + math.cos(math.pi*decay_ratio))
+        return lr
 
     def fit(self):
 
         running_loss = 0
         a = time.time()
-        self.optimizer.zero_grad()
         for itr in range(1, self.train_iters+1):
-            # run gradient accumulation to simulate larger batch size
-            for _ in range(self.accum_steps):
+            self.optimizer.zero_grad()
+            for accum_itr in range(self.accum_steps):
+                
                 x, y = self._get_batch(True)
                 x, y = x.to(self.device), y.to(self.device)
-                # cast to float16 to save up cuda memory
                 with torch.autocast(device_type=self.device, dtype=torch.float16):
                     _, loss = self.model(x, y)
                 
                 running_loss += loss.item()
-                loss /= self.accum_steps # normalize it for updating the weights
+                loss /= self.accum_steps # normalize loss according to grad accum steps
                 loss.backward()
             
+            lr = self._get_lr(itr) # get updated lr
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = lr 
+            
             self.optimizer.step()
-            self.optimizer.zero_grad(set_to_none=True)
 
             if itr%self.eval_step==0:
                 self.model.eval()
@@ -95,9 +115,10 @@ class Trainer:
                     "iter": [itr],
                     "train_loss": [running_loss/(self.eval_step*self.accum_steps)],
                     "eval_loss": [eval_loss/self.eval_iters],
+                    "lr": [lr],
                     "time": [round(b-a, 3)]
                 })
-                running_loss = 0 # reset train loss
+                running_loss = 0
                 self.metrics = pd.concat([self.metrics, new_row], axis=0, ignore_index=True)
                 print(self.metrics.to_string(index=False))
                 a = time.time()

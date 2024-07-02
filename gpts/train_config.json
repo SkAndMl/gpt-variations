@@ -1,9 +1,11 @@
 {
-    "lr": 3e-4,
+    "max_lr": 1e-4,
+    "min_lr": 1e-5,
     "bs": 16,
-    "gradient_accumulation_steps": 2,
-    "wd": 1e-4,
-    "train_iters": 10,
-    "eval_step": 2,
-    "eval_iters": 5
+    "gradient_accumulation_steps": 4,
+    "wd": 1e-2,
+    "train_iters": 10000,
+    "eval_step": 50,
+    "eval_iters": 200,
+    "warmup_steps": 150
 }

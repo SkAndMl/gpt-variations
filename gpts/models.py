@@ -21,7 +21,6 @@ class CausalSelfAttention(nn.Module):
         self.o_proj = nn.Linear(d_model, d_model)
         self.attn_dropout = config['attn_dropout']     
         
-        # create causal mask
         ctx_length = config['ctx_length']
         mask = torch.tril(torch.ones(ctx_length, ctx_length)).unsqueeze(0).unsqueeze(0) # 1, 1, ctx_length, ctx_length
         self.register_buffer('mask', mask)
@@ -36,7 +35,6 @@ class CausalSelfAttention(nn.Module):
         v = v.view(b, t, self.n_heads, head_dim).transpose(1, 2)
         
         wts = (q @ k.transpose(2, 3)) / math.sqrt(head_dim)
-        # set upper triangular values to infinity so softmax goes to zero
         wts.masked_fill_(self.mask[:, :, :t, :t].logical_not()==1, float("-inf")) # b, n_heads, t, t
         wts = F.softmax(wts, dim=-1)
         y = (wts @ v) # b, n_heads, t, head_dim
@@ -50,7 +48,6 @@ class MLP(nn.Module):
 
         super().__init__()
         d_model = config['d_model']
-        # set up the mlp net
         self.seq_layer = nn.Sequential(
             nn.Linear(d_model, d_model*4),
             nn.GELU(),
@@ -91,7 +88,7 @@ class GPT(nn.Module):
 
         # tie the weights to reduce params
         self.decoder.wte.weight = self.decoder.lm_head.weight
-        self.apply(self._init_weights) # init weights
+        self.apply(self._init_weights)
 
     def forward(self, x, y=None):
         b, t = x.shape
@@ -132,29 +129,25 @@ class pGPT(nn.Module):
             lm_head = nn.Linear(config['d_model'], config['vocab_size']),
             path_weight = nn.Parameter(torch.tensor(0.5), requires_grad=True)
         ))
-        self.path_weight = nn.Parameter(torch.tensor(0.5), requires_grad=True)
+        
         self.apply(self._init_weights)
     
     def forward(self, x, y=None):
         b, t = x.shape
-        tok_emb1, tok_emb2 = self.decoder.wte(x).split(self.d_model, dim=2)
-        pos_emb1, pos_emb2 = self.decoder.wpe(torch.arange(0, t, device=x.device).unsqueeze(0)).split(self.d_model, dim=2)
+        tok_emb1, tok_emb2 = self.decoder.wte(x).split(self.d_model, 2)
+        pos_emb1, pos_emb2 = self.decoder.wpe(torch.arange(0, t, device=x.device).unsqueeze(0)).split(self.d_model, 2)
         x1, x2 = tok_emb1 + pos_emb1, tok_emb2 + pos_emb2
 
-        # zip blocks in path1 and path2 and pass x1 and x2 through them
         for block1, block2 in zip(self.decoder.path_1, self.decoder.path_2):
             x1 = block1(x1)
             x2 = block2(x2)
-        
-        # get the weighted sum of the outputs for the two paths
-        # TODO: make sure that path_weight lies b/w 0 and 1
-        x = self.path_weight*x1 + (1-self.path_weight)*x2
+        x = self.decoder.path_weight*x1 + (1-self.decoder.path_weight)*x2
         logits = self.decoder.lm_head(x)
         
         loss = None
         if y is not None:
             # y -> b, t
-            loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), y.view(-1))
+            loss = F.cross_entropy(logits.view(b*t, -1), y.view(-1))
         
         return logits, loss
     
