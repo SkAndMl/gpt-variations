@@ -19,7 +19,7 @@ class CausalSelfAttention(nn.Module):
         self.n_heads = config['n_heads']
         self.qkv_proj = nn.Linear(d_model, d_model*3)
         self.o_proj = nn.Linear(d_model, d_model)
-        self.attn_dropout = config['attn_dropout']     
+        self.attn_dropout = nn.Dropout(p=config['attn_dropout'])     
         
         ctx_length = config['ctx_length']
         mask = torch.tril(torch.ones(ctx_length, ctx_length)).unsqueeze(0).unsqueeze(0) # 1, 1, ctx_length, ctx_length
@@ -36,7 +36,7 @@ class CausalSelfAttention(nn.Module):
         
         wts = (q @ k.transpose(2, 3)) / math.sqrt(head_dim)
         wts.masked_fill_(self.mask[:, :, :t, :t].logical_not()==1, float("-inf")) # b, n_heads, t, t
-        wts = F.softmax(wts, dim=-1)
+        wts = self.attn_dropout(F.softmax(wts, dim=-1))
         y = (wts @ v) # b, n_heads, t, head_dim
         y = y.transpose(1, 2).contiguous().view(b, t, d_model)
         return self.o_proj(y)
@@ -85,10 +85,9 @@ class GPT(nn.Module):
             blocks = nn.ModuleList([DecoderBlock(config) for _ in range(config['n_decoders'])]),
             lm_head = nn.Linear(config['d_model'], config['vocab_size'])
         ))
-
         # tie the weights to reduce params
         self.decoder.wte.weight = self.decoder.lm_head.weight
-        self.apply(self._init_weights)
+#         self.apply(self._init_weights)
 
     def forward(self, x, y=None):
         b, t = x.shape

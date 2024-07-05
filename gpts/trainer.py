@@ -5,9 +5,12 @@ June 30, 2024
 
 import matplotlib.pyplot as plt
 import torch
+from torch import nn
 import time
 import math
+import random
 import pandas as pd
+import numpy as np
 from torch.optim import AdamW
 from gpts.data import TextDataset
 from gpts.models import GPT, pGPT, ccGPT, lcGPT
@@ -20,8 +23,10 @@ class Trainer:
         self.model_config = model_config
         self.device = train_config["device"]
         self._init_model(model_config['model_type'])
-        self.train_ds = TextDataset(train=True)
+        self.train_data = np.load("data/train.npy")
+        self.test_data = np.load("data/test.npy")
         self.test_ds = TextDataset(train=False)
+        self.ctx_length = model_config['ctx_length']
         self.train_iters = train_config['train_iters']
         self.eval_step = train_config['eval_step']
         self.eval_iters = train_config['eval_iters']
@@ -32,6 +37,7 @@ class Trainer:
         self.max_lr = train_config['max_lr']
         self.min_lr = train_config['min_lr']
         self.warmup_steps = train_config['warmup_steps']
+        self.grad_clip = train_config.get("grad_clip", None)
         
 
     def _init_model(self, model):
@@ -50,18 +56,23 @@ class Trainer:
         
         self.model = self.model.to(self.device)
         self.optimizer = AdamW(params=self.model.parameters(),
-                               lr=self.train_config['min_lr'])
+                               lr=self.train_config['max_lr'],
+                              weight_decay=self.train_config['wd'])
 
  
     def _get_batch(self, train=True):
         
         if train:
-            idxs = torch.randint(0, len(self.train_ds), size=(self.train_config['bs'],)).numpy()
-            return self.train_ds[idxs]
+            idxs = random.sample(list(range(self.train_data.shape[0]-self.ctx_length-1)), k=self.train_config['bs'])
+            blocks = [torch.tensor(self.train_data[idx:idx+self.ctx_length+1], dtype=torch.long) for idx in idxs]
+            blocks = torch.stack(blocks, dim=0)
+            return blocks[:, :-1], blocks[:, 1:]
         else:
-            idxs = torch.randint(0, len(self.test_ds), size=(self.train_config['bs'],)).numpy()
-            return self.test_ds[idxs]
-        
+            idxs = random.sample(list(range(self.test_data.shape[0]-self.ctx_length-1)), k=self.train_config['bs'])
+            blocks = [torch.tensor(self.test_data[idx:idx+self.ctx_length+1], dtype=torch.long) for idx in idxs]
+            blocks = torch.stack(blocks, dim=0)
+            return blocks[:, :-1], blocks[:, 1:]
+    
         
     def _get_lr(self, itr):
         # warmup the lr
@@ -93,9 +104,13 @@ class Trainer:
                 loss /= self.accum_steps # normalize loss according to grad accum steps
                 loss.backward()
             
+            # clip gradients to handle exploding gradients
+            if self.grad_clip is not None:
+                nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+            
             lr = self._get_lr(itr) # get updated lr
             for param_group in self.optimizer.param_groups:
-                param_group['lr'] = lr 
+                param_group['lr'] = lr # update lr
             
             self.optimizer.step()
 
