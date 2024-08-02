@@ -9,39 +9,38 @@ from contextlib import nullcontext
 
 import numpy as np
 import torch
-from models import GPT, GPTConfig, ParallelGPT, ConvGPT, LinearGPT
 from dataclasses import dataclass
+from models import GPTConfig, GPT, ParallelGPT, ConvGPT, LinearGPT
 
 # -----------------------------------------------------------------------------
 # I/O
 @dataclass
 class TrainConfig:
     out_dir = 'out'
-    eval_interval: int = 2000
+    eval_interval: int = 1000
     log_interval = 100
     eval_iters = 100
-    warmup_iters = 1000
-    max_iters = 20000
-    lr_decay_iters = 20000 
+    warmup_iters = 2000
+    max_iters = 10000
+    lr_decay_iters = 10000 
     eval_only = False 
     always_save_checkpoint = True 
-    dataset = 'tok2048'
-    gradient_accumulation_steps: int = 4
-    batch_size: int = 32
-    block_size: int = 512
+    dataset = 'data'
+    gradient_accumulation_steps = 4
+    batch_size: int = 16
     device = 'cuda' if torch.cuda.is_available() else "cpu"
     dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'  
     device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
     ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
     ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
     data_dir = os.path.join('data', dataset)
-    weight_decay = 1e-1
+    weight_decay = 1e-2
     beta1 = 0.9
     beta2 = 0.95
-    learning_rate = 6e-4
-    min_lr = 6e-5
+    learning_rate = 3e-4
+    min_lr = 3e-5
     decay_lr = True
-    grad_clip = 1.0
+    grad_clip = 1.0    
 
 
 def train(train_config: TrainConfig, model_config: GPTConfig):
@@ -52,15 +51,15 @@ def train(train_config: TrainConfig, model_config: GPTConfig):
     elif model_config.model_type=='lgpt': model=LinearGPT(model_config)
 
     os.makedirs(train_config.out_dir, exist_ok=True)
-
+    
     def get_batch(split):
         if split == 'train':
             data = np.memmap(os.path.join(train_config.data_dir, 'train.bin'), dtype=np.uint16, mode='r')
         else:
             data = np.memmap(os.path.join(train_config.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-        ix = torch.randint(len(data) - train_config.block_size, (train_config.batch_size,))
-        x = torch.stack([torch.from_numpy((data[i:i+train_config.block_size]).astype(np.int64)) for i in ix])
-        y = torch.stack([torch.from_numpy((data[i+1:i+1+train_config.block_size]).astype(np.int64)) for i in ix])
+        ix = torch.randint(len(data) - model_config.block_size, (train_config.batch_size,))
+        x = torch.stack([torch.from_numpy((data[i:i+model_config.block_size]).astype(np.int64)) for i in ix])
+        y = torch.stack([torch.from_numpy((data[i+1:i+1+model_config.block_size]).astype(np.int64)) for i in ix])
         if train_config.device_type == 'cuda':
             x, y = x.pin_memory().to(train_config.device, non_blocking=True), y.pin_memory().to(train_config.device, non_blocking=True)
         else:
@@ -158,6 +157,3 @@ def train(train_config: TrainConfig, model_config: GPTConfig):
         # termination conditions
         if iter_num > train_config.max_iters:
             break
-
-if __name__ == "__main__":
-    train(TrainConfig(), GPTConfig())

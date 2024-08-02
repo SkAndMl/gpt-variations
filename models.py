@@ -105,18 +105,19 @@ class ConvBlock(nn.Module):
         x = self.conv_block.block_2(x).transpose(1, 2) # b, n_embd, t
         x = self.conv_block.conv1(x).transpose(1, 2) # b, t, n_embd//2
         return x
-    
+
 
 @dataclass
 class GPTConfig:
-    block_size: int = 512
-    vocab_size: int = 2048 
+    block_size: int = 256
+    vocab_size: int = 288
     n_layer: int = 6
     n_head: int = 6
-    n_embd: int = 384
-    dropout: float = 0.15
+    n_embd: int = 288
+    dropout: float = 0.1
     bias: bool = False 
     model_type: str = 'gpt' # pgpt, cgpt, lgpt
+
 
 class GPTBase(nn.Module):
     def __init__(self, config):
@@ -188,7 +189,7 @@ class GPT(GPTBase):
     def __init__(self, config):
         super().__init__(config)
         self.transformer.h = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
-        self.transformer.wte.weight = self.lm_head.weight
+#         self.transformer.wte.weight = self.lm_head.weight
         
     def forward(self, idx, targets=None):
         device = idx.device
