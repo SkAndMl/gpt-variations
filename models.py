@@ -277,11 +277,12 @@ class ParallelGPT(GPTBase):
         return logits, loss
 
 
-class ConvGPT(nn.Module):
+class ConvGPT(GPTBase):
 
     def __init__(self, config):
         super().__init__(config)
-        final_dim = config.n_embd // (2 ** (config.n_layer // 2 - 1))
+        final_dim = config.n_embd // (2 ** (config.n_layer // 2))
+        self.transformer.ln_f = LayerNorm(final_dim, config.bias)
         self.transformer.h = nn.ModuleList([])
         for _ in range(config.n_layer // 2):
             self.transformer.h.append(ConvBlock(config))
@@ -316,7 +317,8 @@ class LinearGPT(GPTBase):
 
     def __init__(self, config):
         super().__init__(config)
-        final_dim = config.n_embd // (2 ** (config.n_layer // 2 - 1))
+        final_dim = config.n_embd // (2 ** (config.n_layer // 2))
+        self.transformer.ln_f = LayerNorm(final_dim, config.bias)
         self.transformer.h = nn.ModuleList([])
         for _ in range(config.n_layer // 2):
             self.transformer.h.extend([

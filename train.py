@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from dataclasses import dataclass
 from models import GPTConfig, GPT, ParallelGPT, ConvGPT, LinearGPT
+from torch.utils.tensorboard import SummaryWriter
 
 # -----------------------------------------------------------------------------
 # I/O
@@ -19,10 +20,10 @@ class TrainConfig:
     out_dir = 'out'
     eval_interval: int = 1000
     log_interval = 100
-    eval_iters = 100
-    warmup_iters = 2000
-    max_iters = 10000
-    lr_decay_iters = 10000 
+    eval_iters = 50
+    warmup_iters = 1000
+    max_iters = 4000
+    lr_decay_iters = 4000 
     eval_only = False 
     always_save_checkpoint = True 
     dataset = 'data'
@@ -40,7 +41,9 @@ class TrainConfig:
     learning_rate = 3e-4
     min_lr = 3e-5
     decay_lr = True
-    grad_clip = 1.0    
+    grad_clip = 1.0
+    
+
 
 
 def train(train_config: TrainConfig, model_config: GPTConfig):
@@ -51,6 +54,8 @@ def train(train_config: TrainConfig, model_config: GPTConfig):
     elif model_config.model_type=='lgpt': model=LinearGPT(model_config)
 
     os.makedirs(train_config.out_dir, exist_ok=True)
+    
+    writer = SummaryWriter(log_dir=os.path.join(train_config.out_dir, model_config.model_type))
     
     def get_batch(split):
         if split == 'train':
@@ -108,8 +113,9 @@ def train(train_config: TrainConfig, model_config: GPTConfig):
             param_group['lr'] = lr
 
         # evaluate the loss on train/val sets and write checkpoints
-        if iter_num % train_config.eval_interval == 0:
+        if iter_num % train_config.eval_interval == 0 and train_config.eval_interval%100==0:
             losses = estimate_loss()
+            writer.add_scalar('Loss/val', losses['val'], iter_num)
             print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         
             if losses['val'] < best_val_loss:
