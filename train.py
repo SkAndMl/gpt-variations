@@ -10,25 +10,25 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 from dataclasses import dataclass
-from models import GPTConfig, GPT, ParallelGPT, ConvGPT, LinearGPT
 from torch.utils.tensorboard import SummaryWriter
+from models import GPTConfig, GPT, ParallelGPT, ConvGPT, LinearGPT
 
 # -----------------------------------------------------------------------------
 # I/O
 @dataclass
 class TrainConfig:
     out_dir = 'out'
-    eval_interval: int = 1000
+    eval_interval: int = 200
     log_interval = 100
-    eval_iters = 50
-    warmup_iters = 1000
-    max_iters = 4000
-    lr_decay_iters = 4000 
+    eval_iters = 200
+    warmup_iters = 500
+    max_iters = 5000
+    lr_decay_iters = max_iters 
     eval_only = False 
     always_save_checkpoint = True 
     dataset = 'data'
-    gradient_accumulation_steps = 4
-    batch_size: int = 16
+    gradient_accumulation_steps = 1
+    batch_size: int = 64
     device = 'cuda' if torch.cuda.is_available() else "cpu"
     dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'  
     device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
@@ -43,8 +43,6 @@ class TrainConfig:
     decay_lr = True
     grad_clip = 1.0
     
-
-
 
 def train(train_config: TrainConfig, model_config: GPTConfig):
 
@@ -113,7 +111,7 @@ def train(train_config: TrainConfig, model_config: GPTConfig):
             param_group['lr'] = lr
 
         # evaluate the loss on train/val sets and write checkpoints
-        if iter_num % train_config.eval_interval == 0 and train_config.eval_interval%100==0:
+        if iter_num % train_config.eval_interval == 0 and iter_num%100==0:
             losses = estimate_loss()
             writer.add_scalar('Loss/val', losses['val'], iter_num)
             print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
@@ -130,7 +128,7 @@ def train(train_config: TrainConfig, model_config: GPTConfig):
                         'train_config': train_config
                     }
                     print(f"saving checkpoint to {train_config.out_dir}")
-                    torch.save(checkpoint, os.path.join(train_config.out_dir, 'ckpt.pt'))
+                    torch.save(checkpoint, os.path.join(train_config.out_dir, f'{model_config.model_type}.pt'))
 
         for micro_step in range(train_config.gradient_accumulation_steps):
             with train_config.ctx:

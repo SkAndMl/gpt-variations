@@ -1,21 +1,21 @@
-from datasets import load_dataset
 import numpy as np
 import os
+import json
 
-ds = load_dataset('Salesforce/wikitext', 'wikitext-2-v1')
-train_txt, val_txt = '', ''
+with open('data/shakespeare.txt', 'r') as f: data = f.read()
 
-for item in ds['train']: train_txt += item['text']
-for item in ds['validation']: train_txt += item['text']
-for item in ds['test']: val_txt += item['text']
 
-chars = sorted(list(set(train_txt + val_txt)))
+chars = sorted(list(set(data)))
+n = len(data)
+train_txt = data[:int(n*0.9)]
+val_txt = data[int(n*0.9):]
 stoi = {ch:i for i, ch in enumerate(chars)}
-itos = {i:ch for ch, i in enumerate(chars)}
+itos = {i:ch for i, ch in enumerate(chars)}
 encode_fn = lambda s: [stoi[ch] for ch in s]
 print(f'vocab size: {len(chars)}')
 
-
+with open('data/stoi.json', 'w') as f: json.dump(stoi, f)
+with open('data/itos.json', 'w') as f: json.dump(itos, f)
 with open('data/train.txt', 'w') as f: f.write(train_txt)
 with open('data/val.txt', 'w') as f: f.write(val_txt)
 
