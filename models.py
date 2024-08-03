@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
@@ -20,6 +21,7 @@ class LayerNorm(nn.Module):
 
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+
 
 class CausalSelfAttention(nn.Module):
 
@@ -60,6 +62,7 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_dropout(self.c_proj(y))
         return y
 
+
 class MLP(nn.Module):
 
     def __init__(self, config):
@@ -76,6 +79,7 @@ class MLP(nn.Module):
         x = self.dropout(x)
         return x
 
+
 class Block(nn.Module):
 
     def __init__(self, config):
@@ -89,6 +93,7 @@ class Block(nn.Module):
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
         return x
+    
     
 class ConvBlock(nn.Module):
 
@@ -182,6 +187,21 @@ class GPTBase(nn.Module):
         print(f"using fused AdamW: {use_fused}")
 
         return optimizer
+        
+    @torch.inference_mode()
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+        for _ in range(max_new_tokens):
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            logits, _ = self(idx_cond)
+            logits = logits[:, -1, :] / temperature
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+            probs = F.softmax(logits, dim=-1)
+            idx_next = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat((idx, idx_next), dim=1)
+
+        return idx
 
 
 class GPT(GPTBase):
@@ -189,7 +209,6 @@ class GPT(GPTBase):
     def __init__(self, config):
         super().__init__(config)
         self.transformer.h = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
-#         self.transformer.wte.weight = self.lm_head.weight
         
     def forward(self, idx, targets=None):
         device = idx.device
@@ -213,26 +232,6 @@ class GPT(GPTBase):
 
         return logits, loss
 
-    @torch.inference_mode()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
-        """
-        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
-        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
-        """
-        for _ in range(max_new_tokens):
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-            logits, _ = self(idx_cond)
-            logits = logits[:, -1, :] / temperature
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
-            probs = F.softmax(logits, dim=-1)
-            idx_next = torch.multinomial(probs, num_samples=1)
-            idx = torch.cat((idx, idx_next), dim=1)
-
-        return idx
-    
 
 class ParallelGPT(GPTBase):
 
@@ -244,7 +243,7 @@ class ParallelGPT(GPTBase):
         self.transformer.wpe = nn.Embedding(config.block_size, config.n_embd * 2)
         self.transformer.wt = nn.Parameter(data=torch.tensor(0.5), requires_grad=True)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, drop_one=False):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -257,7 +256,11 @@ class ParallelGPT(GPTBase):
             x_1, x_2 = block_1(x_1), block_2(x_2)
         
         wt = F.sigmoid(self.transformer.wt)
-        x = wt*x_1 + (1-wt)*x_2
+        if drop_one:   
+            if wt>=0.5: x = x_1
+            else: x = x_2
+        else:   
+            x = wt*x_1 + (1-wt)*x_2
         x = self.transformer.ln_f(x)
 
         if targets is not None:
@@ -268,6 +271,21 @@ class ParallelGPT(GPTBase):
             loss = None
 
         return logits, loss
+
+    @torch.inference_mode()
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, drop_one:bool=True):
+        for _ in range(max_new_tokens):
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            logits, _ = self(idx_cond, drop_one=drop_one)
+            logits = logits[:, -1, :] / temperature
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+            probs = F.softmax(logits, dim=-1)
+            idx_next = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat((idx, idx_next), dim=1)
+
+        return idx
 
 
 class ConvGPT(GPTBase):
@@ -304,7 +322,7 @@ class ConvGPT(GPTBase):
             loss = None
 
         return logits, loss
-
+    
 
 class LinearGPT(GPTBase):
 
@@ -320,7 +338,6 @@ class LinearGPT(GPTBase):
             config.n_embd //= 2
 
         self.lm_head = nn.Linear(final_dim, config.vocab_size, bias=False)
-
 
     def forward(self, idx, targets=None):
         device = idx.device
