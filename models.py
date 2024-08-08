@@ -114,14 +114,13 @@ class ConvBlock(nn.Module):
 
 @dataclass
 class GPTConfig:
-    block_size: int = 256
-    vocab_size: int = 72
-    n_layer: int = 6
-    n_head: int = 6
-    n_embd: int = 384
-    dropout: float = 0.2
-    bias: bool = False 
-    model_type: str = 'gpt' # pgpt, cgpt, lgpt
+    block_size: int = 1024 # max sequence length
+    vocab_size: int = 50257 # number of tokens: 50,000 BPE merges + 256 bytes tokens + 1 <|endoftext|> token
+    n_layer: int = 8 # number of layers
+    n_head: int = 8 # number of heads
+    n_embd: int = 512 # embedding dimension
+    dropout: float = 0.0
+    bias = False
 
 
 class GPTBase(nn.Module):
