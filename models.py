@@ -221,12 +221,10 @@ class GPT(GPTBase):
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
-
+        logits = self.lm_head(x)
         if targets is not None:
-            logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            logits = self.lm_head(x[:, [-1], :]) 
             loss = None
 
         return logits, loss
@@ -262,12 +260,10 @@ class ParallelGPT(GPTBase):
             x = wt*x_1 + (1-wt)*x_2
         x = self.transformer.ln_f(x)
 
+        logits = self.lm_head(x)
+        loss = None
         if targets is not None:
-            logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        else:
-            logits = self.lm_head(x[:, [-1], :]) 
-            loss = None
 
         return logits, loss
 
@@ -313,12 +309,10 @@ class ConvGPT(GPTBase):
             x = block(x)
         x = self.transformer.ln_f(x)
 
+        logits = self.lm_head(x)
+        loss = None
         if targets is not None:
-            logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        else:
-            logits = self.lm_head(x[:, [-1], :]) 
-            loss = None
 
         return logits, loss
     
@@ -351,11 +345,9 @@ class LinearGPT(GPTBase):
             x = block(x)
         x = self.transformer.ln_f(x)
 
+        logits = self.lm_head(x)
+        loss = None
         if targets is not None:
-            logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        else:
-            logits = self.lm_head(x[:, [-1], :]) 
-            loss = None
 
         return logits, loss

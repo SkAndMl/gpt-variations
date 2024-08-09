@@ -34,10 +34,11 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from transformers import GPT2LMHeadModel
+from models import GPTConfig, GPT, ParallelGPT, LinearGPT, ConvGPT
 
 # -----------------------------------------------------------------------------
 DATA_CACHE_DIR = os.path.join(os.path.dirname(__file__), "hellaswag")
+
 
 def download_file(url: str, fname: str, chunk_size=1024):
     """Helper function to download a file from a given url"""
@@ -54,13 +55,14 @@ def download_file(url: str, fname: str, chunk_size=1024):
             size = file.write(data)
             bar.update(size)
 
+
 hellaswags = {
     "train": "https://raw.githubusercontent.com/rowanz/hellaswag/master/data/hellaswag_train.jsonl",
     "val": "https://raw.githubusercontent.com/rowanz/hellaswag/master/data/hellaswag_val.jsonl",
     "test": "https://raw.githubusercontent.com/rowanz/hellaswag/master/data/hellaswag_test.jsonl",
 }
-
 enc = tiktoken.get_encoding("gpt2")
+
 
 def download(split):
     """Downloads HellaSwag DATA_CACHE_DIR"""
@@ -70,6 +72,7 @@ def download(split):
     if not os.path.exists(data_filename):
         print(f"Downloading {data_url} to {data_filename}...")
         download_file(data_url, data_filename)
+
 
 def render_example(example):
     """
@@ -110,6 +113,7 @@ def render_example(example):
 
     return data, tokens, mask, label
 
+
 def iterate_examples(split):
     # there are 10,042 examples in total in val
     download(split)
@@ -118,11 +122,18 @@ def iterate_examples(split):
             example = json.loads(line)
             yield example
 
+
 @torch.no_grad()
 def evaluate(model_type, device):
 
     torch.set_float32_matmul_precision('high') # use tf32
-    model = GPT2LMHeadModel.from_pretrained(model_type)
+    if model_type=='gpt': model = GPT(GPTConfig(vocab_size=50304))
+    elif model_type=="pgpt": model = ParallelGPT(GPTConfig(vocab_size=50304))
+    elif model_type=="lgpt": model = LinearGPT(GPTConfig(vocab_size=50304))
+    elif model_type=="cgpt": model = ConvGPT(GPTConfig(vocab_size=50304))
+    
+    cp = torch.load(f'checkpoints/{model_type}.pt', map_location=device)
+    model.load_state_dict(cp['model'])
     model.to(device)
     # model = torch.compile(model) # optionally torch compile the model
 
@@ -135,7 +146,7 @@ def evaluate(model_type, device):
         mask = mask.to(device)
 
         # get the logits
-        logits = model(tokens).logits
+        logits, _ = model(tokens)
         # evaluate the autoregressive loss at all positions
         shift_logits = (logits[..., :-1, :]).contiguous()
         shift_tokens = (tokens[..., 1:]).contiguous()
@@ -158,21 +169,15 @@ def evaluate(model_type, device):
         num_total += 1
         num_correct += int(pred == label)
         num_correct_norm += int(pred_norm == label)
-        print(f"{num_total} acc_norm: {num_correct_norm}/{num_total}={num_correct_norm/num_total:.4f}")
 
-        # debug: pretty print a few examples, and the losses in each case
-        if num_total < 10:
-            print("---")
-            print(f"Context:\n {example['ctx']}")
-            print(f"Endings:")
-            for i, end in enumerate(example["endings"]):
-                print(f"{i} (loss: {avg_loss[i].item():.4f}) {end}")
-            print(f"predicted: {pred_norm}, actual: {label}")
+    print(f"{num_total} acc_norm: {num_correct_norm}/{num_total}={num_correct_norm/num_total:.4f}")
+    with open('hellaswag_log.txt', 'a') as f:
+        f.write(f"{num_total} {model_type} acc_norm: {num_correct_norm}/{num_total}={num_correct_norm/num_total:.4f}")
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model_type", type=str, default="gpt2", help="the model type to use")
+    parser.add_argument("-m", "--model_type", type=str, default="gpt", help="the model type to use")
     parser.add_argument("-d", "--device", type=str, default="cuda", help="the device to use")
     args = parser.parse_args()
     evaluate(args.model_type, args.device)
