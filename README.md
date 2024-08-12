@@ -19,23 +19,7 @@ The paper introduces the different variants of a decoder only transformer model 
 - trains faster, less number of params and occupies less space
 
 ## loss curve
-<img src='assets/loss_curve.png' width=500>
+<img src='assets/loss_comparison.png' width=500>
 
-## model sizes
-| model_name | model_size |
-| ---------- | ---------- |
-| gpt        | 10.7M      |
-| pgpt       | 10.9M      |
-| cgpt       | 4.87M      |
-| lgpt       | 4.87M      |
-
-## hyperparams
-| hyperparam    | value   |
-| ------------- | ------- |
-| context_length| 256     |
-| vocab_size    | 72      |
-| n_layer       | 6       |
-| n_head        | 6       |
-| n_embd        | 384     |
-| dropout       | 0.2     |
+to update: model params and sizes, results on the benchmarks
 
