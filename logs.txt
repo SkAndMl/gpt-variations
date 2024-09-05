@@ -1,0 +1,12 @@
+winogrande, gpt: 638/1267 -> 0.5035516969218626
+winogrande, pgpt: 605/1267 -> 0.47750591949486976
+winogrande, cgpt: 602/1267 -> 0.47513812154696133
+winogrande, lgpt: 617/1267 -> 0.48697711128650356
+commonsenseqa, gpt: 168/1221 -> 0.1375921375921376
+commonsenseqa, pgpt: 185/1221 -> 0.15151515151515152
+commonsenseqa, cgpt: 188/1221 -> 0.15397215397215397
+commonsenseqa, lgpt: 178/1221 -> 0.1457821457821458
+anli, gpt: 330/1000 -> 0.33
+anli, pgpt: 324/1000 -> 0.324
+anli, cgpt: 324/1000 -> 0.324
+anli, lgpt: 329/1000 -> 0.329

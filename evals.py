@@ -51,7 +51,7 @@ def evaluate_winogrande():
             f.write(f'winogrande, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
 
 
-def evaluate_commonsenseqa(question, choices, correct_answer):
+def evaluate_commonsenseqa():
     
     commonsenseqa = load_dataset('commonsense_qa', split='validation')  # Limiting to the first 10 examples
     
@@ -80,7 +80,40 @@ def evaluate_commonsenseqa(question, choices, correct_answer):
         with open("logs.txt", "a") as f:
             f.write(f'commonsenseqa, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
 
+def evaluate_anli():
+    anli = load_dataset('anli', split='dev_r1')  
+    labels = ['entailment', 'contradiction', 'neutral']
+    
+    for model_id in models:
+        num_correct, num_total = 0, 0
+        model = models[model_id]
+        model.eval()
+        
+        for example in anli:
+            premise = example['premise']
+            hypothesis = example['hypothesis']
+            correct_label = example['label']
+            sequences = [
+                f"Premise: {premise}. Hypothesis: {hypothesis}. Premise entails Hypothesis",
+                f"Premise: {premise}. Hypothesis: {hypothesis}. Premise contradicts Hypothesis",
+                f"Premise: {premise}. Hypothesis: {hypothesis}. Premise neutral Hypothesis."
+            ]
+
+            label_probs = {}
+            for label, sequence in zip(labels, sequences):
+                input_ids = tokenizer.encode(sequence, return_tensors='pt')
+                with torch.inference_mode():
+                    logits, _ = model(input_ids)
+                    sequence_prob = torch.sum(torch.log_softmax(logits, dim=-1)).item()
+                    label_probs[label] = sequence_prob
+
+            predicted_label = max(label_probs, key=label_probs.get)
+            num_correct += 1 if predicted_label==labels[correct_label] else 0
+            num_total += 1
+        
+        with open("logs.txt", "a") as f:
+            f.write(f'anli, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
+
 
 if __name__ == "__main__":
-    evaluate_winogrande()
-    evaluate_commonsenseqa()
+    evaluate_anli()
