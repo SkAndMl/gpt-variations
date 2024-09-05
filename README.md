@@ -23,3 +23,12 @@ The paper introduces the different variants of a decoder only transformer model 
 
 to update: model params and sizes, results on the benchmarks
 
+benchmarks to evaluate on:
+1. glue
+2. superglue
+3. snli
+4. anli
+5. squad
+6. triviaqa
+7. commonsenseqa
+8. winogrande
