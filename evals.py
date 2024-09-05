@@ -115,5 +115,102 @@ def evaluate_anli():
             f.write(f'anli, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
 
 
+def evaluate_piqa():
+
+    piqa = load_dataset('piqa', split='validation')  
+    for model_id in models:
+        model = models[model_id]
+        model.eval()
+
+        num_correct, num_total = 0, 0
+        for example in piqa:
+            question = example['goal']
+            choices = [example['sol1'], example['sol2']]
+            correct_answer = choices[int(example['label'])] 
+            option_probs = {}
+            
+            for option in choices:
+                input_text = f"Question: {question} Answer: {option}"
+                input_ids = tokenizer.encode(input_text, return_tensors='pt')
+
+                with torch.inference_mode():
+                    logits, _ = model(input_ids)
+                    sequence_prob = torch.sum(torch.log_softmax(logits, dim=-1)).item()  
+                    option_probs[option] = sequence_prob
+
+            predicted_answer = max(option_probs, key=option_probs.get)
+            num_correct += 1 if predicted_answer==correct_answer else 0
+            num_total += 1
+
+        with open("logs.txt", "a") as f:
+            f.write(f'piqa, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
+
+
+def evaluate_copa():
+
+    copa = load_dataset('super_glue', 'copa', split='validation')  
+    for model_id in models:
+        model = models[model_id]
+        model.eval()
+        num_correct, num_total = 0, 0
+
+        def calculate_probability(sequence):
+            input_ids = tokenizer.encode(sequence, return_tensors='pt')
+            with torch.no_grad():
+                logits, _ = model(input_ids)
+                return torch.sum(torch.log_softmax(logits, dim=-1)).item()  # Sum log probabilities
+        
+        for example in copa:
+            premise = example['premise']
+            choice1 = example['choice1']
+            choice2 = example['choice2']
+            correct_label = example['label']  # 0 or 1, indicating which choice is correct
+    
+            sequence1 = f"Premise: {premise} Choice: {choice1}"
+            sequence2 = f"Premise: {premise} Choice: {choice2}"
+    
+            prob1 = calculate_probability(sequence1)
+            prob2 = calculate_probability(sequence2)
+
+            predicted_label = 0 if prob1 > prob2 else 1
+            num_correct += 1 if predicted_label==correct_label else 0
+            num_total += 1
+        
+        with open("logs.txt", "a") as f:
+            f.write(f'copa, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
+
+
+def evaluate_arc_easy():
+    
+    arc_easy = load_dataset('ai2_arc', 'ARC-Easy', split='validation')  # Limiting to the first 10 examples
+    for model_id in models:
+        model = models[model_id]
+        model.eval()
+        num_correct, num_total = 0, 0
+        for example in arc_easy:
+            question = example['question']
+            choices = example['choices']['text']
+            correct_label = example['answerKey']  # 'A', 'B', etc.
+            if ord(correct_label)>=65: correct_answer = choices[ord(correct_label) - ord('A')]  
+            else: correct_answer = choices[int(correct_label)-1]
+            option_probs = {}
+            
+            for option in choices:
+                input_text = f"Question: {question} Answer: {option}"
+                input_ids = tokenizer.encode(input_text, return_tensors='pt')
+
+                with torch.inference_mode():
+                    logits, _ = model(input_ids)
+                    sequence_prob = torch.sum(torch.log_softmax(logits, dim=-1)).item()  # Sum log probabilities
+                    option_probs[option] = sequence_prob
+
+            predicted_answer = max(option_probs, key=option_probs.get)
+            num_correct += 1 if predicted_answer==correct_answer else 0
+            num_total += 1
+
+        with open("logs.txt", "a") as f:
+            f.write(f'arc_easy, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
+
+
 if __name__ == "__main__":
-    evaluate_anli()
+    evaluate_arc_easy()
