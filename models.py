@@ -236,11 +236,13 @@ class ParallelGPT(GPTBase):
         super().__init__(config)
         self.transformer.h_1 = nn.ModuleList([Block(config) for _ in range(config.n_layer // 2)])
         self.transformer.h_2 = nn.ModuleList([Block(config) for _ in range(config.n_layer // 2)])
-        self.transformer.wte = nn.Embedding(config.vocab_size, config.n_embd * 2)
-        self.transformer.wpe = nn.Embedding(config.block_size, config.n_embd * 2)
+        self.transformer.lin_1 = nn.Linear(config.n_embd, config.n_embd)
+        self.transformer.lin_2 = nn.Linear(config.n_embd, config.n_embd)
+        self.transformer.wte = nn.Embedding(config.vocab_size, config.n_embd)
+        self.transformer.wpe = nn.Embedding(config.block_size, config.n_embd)
         self.transformer.wt = nn.Parameter(data=torch.tensor(0.5), requires_grad=True)
 
-    def forward(self, idx, targets=None, drop_one=False):
+    def forward(self, idx, targets=None, train=True):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -248,24 +250,35 @@ class ParallelGPT(GPTBase):
 
         tok_emb = self.transformer.wte(idx) 
         pos_emb = self.transformer.wpe(pos)
-        x_1, x_2 = self.transformer.drop(tok_emb + pos_emb).split(self.config.n_embd, dim=-1)
-        for block_1, block_2 in zip(self.transformer.h_1, self.transformer.h_2):
-            x_1, x_2 = block_1(x_1), block_2(x_2)
-        
-        wt = F.sigmoid(self.transformer.wt)
-        if drop_one:   
-            if wt>=0.5: x = x_1
-            else: x = x_2
-        else:   
+        x = self.transformer.drop(pos_emb + tok_emb)
+        if train:
+            x_1 = self.transformer.lin_1(x)
+            x_2 = self.transformer.lin_2(x)
+            for block_1, block_2 in zip(self.transformer.h_1, self.transformer.h_2):
+                x_1, x_2 = block_1(x_1), block_2(x_2)
+            wt = F.sigmoid(self.transformer.wt)   
             x = wt*x_1 + (1-wt)*x_2
-        x = self.transformer.ln_f(x)
+            x = self.transformer.ln_f(x)
 
-        logits = self.lm_head(x)
-        loss = None
-        if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            logits = self.lm_head(x)
+            loss = None
+            if targets is not None:
+                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
-        return logits, loss
+            return logits, loss
+        else:
+            wt = F.sigmoid(self.transformer.wt)
+            path_vec = None
+            if wt>=0.5: 
+                path_vec=self.transformer.lin_1(x)
+                for block_1 in self.transformer.h_1: path_vec = block_1(path_vec)
+            else:
+                path_vec = self.transformer.lin_2(x)
+                for block_2 in self.transformer.h_2: path_vec = block_2(path_vec)
+
+            logits = self.lm_head(path_vec)
+            return logits, None 
+            
 
     @torch.inference_mode()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, drop_one:bool=True):

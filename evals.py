@@ -2,6 +2,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 import torch
 from models import GPT, GPTConfig, ParallelGPT, LinearGPT, ConvGPT
+import time
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -9,13 +10,17 @@ models = {
     "gpt": GPT(GPTConfig(vocab_size=50304)),
     "pgpt": ParallelGPT(GPTConfig(vocab_size=50304)),
     "cgpt": ConvGPT(GPTConfig(vocab_size=50304)),
-    "lgpt": LinearGPT(GPTConfig(vocab_size=50304))   
+    "lgpt": LinearGPT(GPTConfig(vocab_size=50304)), 
+    "pgpt-1": ParallelGPT(GPTConfig(vocab_size=50304))
 }
 
 for model_id in models:
-    models[model_id].load_state_dict(torch.load(f"checkpoints/{model_id}.pt", map_location=device)['model'])
+    if model_id=="pgpt-1":
+        models[model_id].load_state_dict(torch.load('checkpoints/pgpt.pt', map_location=device)['model'])
+    else:
+        models[model_id].load_state_dict(torch.load(f"checkpoints/{model_id}.pt", map_location=device)['model'])
 
-def evaluate_winogrande():
+def evaluate_winogrande(filename):
     
     winogrande = load_dataset("winogrande", "winogrande_xl", split="validation", trust_remote_code=True)
     
@@ -36,8 +41,12 @@ def evaluate_winogrande():
             input_ids2 = tokenizer.encode(sentence_option2, return_tensors='pt')
 
             with torch.inference_mode():
-                logits1, _ = model(input_ids1)
-                logits2, _ = model(input_ids2)
+                if model_id=="pgpt-1":
+                    logits1, _ = model(input_ids1, train=False)
+                    logits2, _ = model(input_ids2, train=False)
+                else:
+                    logits1, _ = model(input_ids1)
+                    logits2, _ = model(input_ids2)
 
                 # Sum log probabilities to get sequence likelihoods
                 prob1 = torch.sum(torch.log_softmax(logits1, dim=-1)).item()
@@ -47,11 +56,11 @@ def evaluate_winogrande():
             if predicted==answer: num_correct += 1
             num_total += 1
 
-        with open("logs.txt", "a") as f:
+        with open(filename, "a") as f:
             f.write(f'winogrande, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
 
 
-def evaluate_commonsenseqa():
+def evaluate_commonsenseqa(filename):
     
     commonsenseqa = load_dataset('commonsense_qa', split='validation')  # Limiting to the first 10 examples
     
@@ -69,7 +78,10 @@ def evaluate_commonsenseqa():
                 input_ids = tokenizer.encode(input_text, return_tensors='pt')
 
                 with torch.inference_mode():
-                    logits, _ = model(input_ids)
+                    if model_id=="pgpt-1":
+                        logits, _ = model(input_ids, train=False)
+                    else:
+                        logits, _ = model(input_ids)
                     sequence_prob = torch.sum(torch.log_softmax(logits, dim=-1)).item()
                     option_probs[option] = sequence_prob
 
@@ -77,10 +89,10 @@ def evaluate_commonsenseqa():
             num_correct += 1 if predicted_answer==correct_answer else 0
             num_total += 1
         
-        with open("logs.txt", "a") as f:
+        with open(filename, "a") as f:
             f.write(f'commonsenseqa, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
 
-def evaluate_anli():
+def evaluate_anli(filename):
     anli = load_dataset('anli', split='dev_r1')  
     labels = ['entailment', 'contradiction', 'neutral']
     
@@ -103,7 +115,10 @@ def evaluate_anli():
             for label, sequence in zip(labels, sequences):
                 input_ids = tokenizer.encode(sequence, return_tensors='pt')
                 with torch.inference_mode():
-                    logits, _ = model(input_ids)
+                    if model_id=="pgpt-1":
+                        logits, _ = model(input_ids, train=False)
+                    else:
+                        logits, _ = model(input_ids)
                     sequence_prob = torch.sum(torch.log_softmax(logits, dim=-1)).item()
                     label_probs[label] = sequence_prob
 
@@ -111,11 +126,11 @@ def evaluate_anli():
             num_correct += 1 if predicted_label==labels[correct_label] else 0
             num_total += 1
         
-        with open("logs.txt", "a") as f:
+        with open(filename, "a") as f:
             f.write(f'anli, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
 
 
-def evaluate_piqa():
+def evaluate_piqa(filename):
 
     piqa = load_dataset('piqa', split='validation')  
     for model_id in models:
@@ -134,7 +149,10 @@ def evaluate_piqa():
                 input_ids = tokenizer.encode(input_text, return_tensors='pt')
 
                 with torch.inference_mode():
-                    logits, _ = model(input_ids)
+                    if model_id=="pgpt-1":
+                        logits, _ = model(input_ids, train=False)
+                    else:
+                        logits, _ = model(input_ids)
                     sequence_prob = torch.sum(torch.log_softmax(logits, dim=-1)).item()  
                     option_probs[option] = sequence_prob
 
@@ -142,11 +160,11 @@ def evaluate_piqa():
             num_correct += 1 if predicted_answer==correct_answer else 0
             num_total += 1
 
-        with open("logs.txt", "a") as f:
+        with open(filename, "a") as f:
             f.write(f'piqa, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
 
 
-def evaluate_copa():
+def evaluate_copa(filename):
 
     copa = load_dataset('super_glue', 'copa', split='validation')  
     for model_id in models:
@@ -157,7 +175,10 @@ def evaluate_copa():
         def calculate_probability(sequence):
             input_ids = tokenizer.encode(sequence, return_tensors='pt')
             with torch.no_grad():
-                logits, _ = model(input_ids)
+                if model_id=="pgpt-1":
+                    logits, _ = model(input_ids, train=False)
+                else:
+                    logits, _ = model(input_ids)
                 return torch.sum(torch.log_softmax(logits, dim=-1)).item()  # Sum log probabilities
         
         for example in copa:
@@ -176,11 +197,11 @@ def evaluate_copa():
             num_correct += 1 if predicted_label==correct_label else 0
             num_total += 1
         
-        with open("logs.txt", "a") as f:
+        with open(filename, "a") as f:
             f.write(f'copa, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
 
 
-def evaluate_arc_easy():
+def evaluate_arc_easy(filename):
     
     arc_easy = load_dataset('ai2_arc', 'ARC-Easy', split='validation')  # Limiting to the first 10 examples
     for model_id in models:
@@ -200,7 +221,10 @@ def evaluate_arc_easy():
                 input_ids = tokenizer.encode(input_text, return_tensors='pt')
 
                 with torch.inference_mode():
-                    logits, _ = model(input_ids)
+                    if model_id=="pgpt-1":
+                        logits, _ = model(input_ids, train=False)
+                    else:
+                        logits, _ = model(input_ids)
                     sequence_prob = torch.sum(torch.log_softmax(logits, dim=-1)).item()  # Sum log probabilities
                     option_probs[option] = sequence_prob
 
@@ -208,9 +232,22 @@ def evaluate_arc_easy():
             num_correct += 1 if predicted_answer==correct_answer else 0
             num_total += 1
 
-        with open("logs.txt", "a") as f:
+        with open(filename, "a") as f:
             f.write(f'arc_easy, {model_id}: {num_correct}/{num_total} -> {num_correct/num_total}\n')
 
 
+def run_eval(filename):
+    evaluate_winogrande(filename)
+    time.sleep(180)
+    evaluate_commonsenseqa(filename)
+    time.sleep(180)
+    evaluate_anli(filename)
+    time.sleep(180)
+    evaluate_piqa(filename)
+    time.sleep(180)
+    evaluate_copa(filename)
+    time.sleep(180)
+    evaluate_arc_easy(filename)
+
 if __name__ == "__main__":
-    evaluate_arc_easy()
+    run_eval("logs.txt")
