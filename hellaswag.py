@@ -128,11 +128,14 @@ def evaluate(model_type, device):
 
     torch.set_float32_matmul_precision('high') # use tf32
     if model_type=='gpt': model = GPT(GPTConfig(vocab_size=50304))
-    elif model_type=="pgpt": model = ParallelGPT(GPTConfig(vocab_size=50304))
+    elif model_type=="pgpt" or model_type=="pgpt-1": model = ParallelGPT(GPTConfig(vocab_size=50304))
     elif model_type=="lgpt": model = LinearGPT(GPTConfig(vocab_size=50304))
     elif model_type=="cgpt": model = ConvGPT(GPTConfig(vocab_size=50304))
     
-    cp = torch.load(f'checkpoints/{model_type}.pt', map_location=device)
+    if model_type=="pgpt-1":
+        cp = torch.load(f'checkpoints/pgpt.pt', map_location=device)
+    else:
+        cp = torch.load(f'checkpoints/{model_type}.pt', map_location=device)
     model.load_state_dict(cp['model'])
     model.to(device)
     # model = torch.compile(model) # optionally torch compile the model
@@ -146,7 +149,10 @@ def evaluate(model_type, device):
         mask = mask.to(device)
 
         # get the logits
-        logits, _ = model(tokens)
+        if model_type=="pgpt-1":
+            logits, _ = model(tokens, train=False)
+        else:
+            logits, _ = model(tokens)
         # evaluate the autoregressive loss at all positions
         shift_logits = (logits[..., :-1, :]).contiguous()
         shift_tokens = (tokens[..., 1:]).contiguous()
