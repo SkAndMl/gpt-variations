@@ -99,16 +99,16 @@ class ConvBlock(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.conv_block = nn.ModuleDict(dict(
-            block_1 = Block(config),
-            block_2 = Block(config),
-            conv1 = nn.Conv1d(config.n_embd, config.n_embd//2, 1)
-        ))
+        self.blocks = nn.ModuleList([Block(config) for _ in range(config.num_blocks_before_conv)])
+        self.conv_layer = nn.Conv1d(config.n_embd, config.n_embd//2, kernel_size=1)
+        
     
     def forward(self, x):
-        x = self.conv_block.block_1(x)
-        x = self.conv_block.block_2(x).transpose(1, 2) # b, n_embd, t
-        x = self.conv_block.conv1(x).transpose(1, 2) # b, t, n_embd//2
+        for block in self.blocks:
+            x = block(x)
+
+        x = x.transpose(1, 2) # b, n_embd, t
+        x = self.conv_layer(x).transpose(1, 2) # b, t, n_embd//2
         return x
 
 
@@ -297,31 +297,45 @@ class ParallelGPT(GPTBase):
 
 
 class ConvGPT(GPTBase):
-
     def __init__(self, config):
         super().__init__(config)
-        final_dim = config.n_embd // (2 ** (config.n_layer // 2))
-        self.transformer.ln_f = LayerNorm(final_dim, config.bias)
-        self.transformer.h = nn.ModuleList([])
-        for _ in range(config.n_layer // 2):
-            self.transformer.h.append(ConvBlock(config))
-            config.n_embd //= 2
 
+        # Dynamically compute the final embedding dimension after applying all ConvBlocks
+        num_conv_blocks = config.n_layer // config.num_blocks_before_conv
+        final_dim = config.n_embd // (2 ** num_conv_blocks)
+
+        # Update final layer normalization to match reduced embedding size
+        self.transformer.ln_f = LayerNorm(final_dim, config.bias)
+
+        # Initialize transformer layers
+        self.transformer.h = nn.ModuleList([])
+        current_embd = config.n_embd  # Start with the original embedding dimension
+
+        for i in range(num_conv_blocks):
+            self.transformer.h.append(ConvBlock(config))
+            current_embd //= 2  # Reduce embedding size after each ConvBlock
+            config.n_embd = current_embd  # Update config to reflect reduced size
+
+        # Define the language modeling head
         self.lm_head = nn.Linear(final_dim, config.vocab_size, bias=False)
 
     def forward(self, idx, targets=None):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
+        pos = torch.arange(0, t, dtype=torch.long, device=device)
 
-        tok_emb = self.transformer.wte(idx) 
-        pos_emb = self.transformer.wpe(pos) 
+        # Embedding layers
+        tok_emb = self.transformer.wte(idx)
+        pos_emb = self.transformer.wpe(pos)
         x = self.transformer.drop(tok_emb + pos_emb)
+
+        # Transformer layers
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
 
+        # Language modeling head
         logits = self.lm_head(x)
         loss = None
         if targets is not None:
